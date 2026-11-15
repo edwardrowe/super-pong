@@ -177,3 +177,15 @@ function hitPaddle(ball: Ball, p: Paddle, side: 0 | 1, px: number, py: number, o
   out.push({ type: 'paddle', side, x: face, y: yAt, speed, offset, spin });
   return true;
 }
+
+/**
+ * Brake the ball toward `target` speed (never speeds it up), keeping its direction. Called each
+ * step while a slowdown is working; the gap closes exponentially at `rate` per second.
+ */
+export function brake(ball: Ball, target: number, rate: number, dt: number): void {
+  const speed = speedOf(ball);
+  if (speed <= target) return;
+  const next = target + (speed - target) * Math.exp(-rate * dt);
+  ball.vx *= next / speed;
+  ball.vy *= next / speed;
+}

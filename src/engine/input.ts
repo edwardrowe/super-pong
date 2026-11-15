@@ -5,6 +5,18 @@ interface Touch {
   lastY: number;
 }
 
+/** An on-screen button a game draws itself. Rect in CSS pixels. */
+export interface ScreenButton {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Extra reach around buttons, in CSS pixels, for thumbs. */
+const BUTTON_SLOP = 12;
+
 /**
  * Two-player input on one screen. Each touch belongs to the half it started on for its
  * whole life, so players can't steal each other's paddle by drifting across the middle.
@@ -15,6 +27,12 @@ export class Input {
   private drag: [number, number] = [0, 0];
   private keys = new Set<string>();
   private pressListeners: ((side: Side) => void)[] = [];
+  private buttons: ScreenButton[] = [];
+  private buttonListeners: ((id: string) => void)[] = [];
+  /** pointerId → id of the button it is holding down. */
+  private held = new Map<number, string>();
+  /** Keys pressed (not auto-repeat) since they were last consumed. */
+  private tapped = new Set<string>();
 
   constructor(private el: HTMLElement) {
     el.addEventListener('pointerdown', this.onDown);
@@ -50,13 +68,50 @@ export class Input {
     this.pressListeners.push(fn);
   }
 
+  /**
+   * Replace the on-screen buttons. A touch that starts on one fires onButton and does not
+   * move a paddle.
+   */
+  setButtons(buttons: ScreenButton[]): void {
+    this.buttons = buttons;
+  }
+
+  onButton(fn: (id: string) => void): () => void {
+    this.buttonListeners.push(fn);
+    return () => (this.buttonListeners = this.buttonListeners.filter((f) => f !== fn));
+  }
+
+  isButtonDown(id: string): boolean {
+    for (const b of this.held.values()) if (b === id) return true;
+    return false;
+  }
+
+  /** True once per press of the key (by KeyboardEvent.code). */
+  consumeKey(code: string): boolean {
+    return this.tapped.delete(code);
+  }
+
   reset(): void {
     this.touches.clear();
+    this.held.clear();
+    this.tapped.clear();
     this.drag = [0, 0];
   }
 
   private onDown = (e: PointerEvent) => {
     e.preventDefault();
+    const btn = this.buttons.find(
+      (b) =>
+        e.clientX >= b.x - BUTTON_SLOP &&
+        e.clientX <= b.x + b.w + BUTTON_SLOP &&
+        e.clientY >= b.y - BUTTON_SLOP &&
+        e.clientY <= b.y + b.h + BUTTON_SLOP,
+    );
+    if (btn) {
+      this.held.set(e.pointerId, btn.id);
+      for (const fn of this.buttonListeners) fn(btn.id);
+      return;
+    }
     const side: Side = e.clientX < window.innerWidth / 2 ? 0 : 1;
     this.touches.set(e.pointerId, { side, lastY: e.clientY });
     try {
@@ -77,11 +132,13 @@ export class Input {
 
   private onUp = (e: PointerEvent) => {
     this.touches.delete(e.pointerId);
+    this.held.delete(e.pointerId);
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (['ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     this.keys.add(e.code);
+    if (!e.repeat) this.tapped.add(e.code);
   };
 
   private onKeyUp = (e: KeyboardEvent) => {

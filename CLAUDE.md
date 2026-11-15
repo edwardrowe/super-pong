@@ -27,9 +27,13 @@ every push to `main` (it runs `npm test` and `npm run build` first).
   paddle growth). Every rally gets one 2–6 paddle hits in, then every 7–12. Power-ups go to whoever
   touched the ball last and stay on court between points (cleared on a new match). Growth lasts the
   whole match and shows as extra segments on the paddle ends; the fifth fuses them into one paddle.
+- `src/games/super-pong/items.ts` — usable items held in a slot at the bottom of each gutter, fired by
+  tapping the slot (an `input.setButtons` button, so it never moves a paddle) or a key (D / ←).
+  First item: Slowdown, which brakes the ball back to serve speed. For now everyone gets one each
+  point; it isn't spawned on court yet.
 - `src/engine/settings.ts` — toggles on the Debug screen (menu and pause). Add an entry to `SETTINGS`
   and read it with `ctx.settings.get(id)`; the panel builds itself. The Debug screen also queues
-  power-up awards for a game that lists `powerUps` and implements `award()`; all of it applies on Save. Spin (off by default) lives
+  power-up awards for a game that lists `powerUps` and implements `award()`; all of it applies on Save. Spin (on by default) lives
   here; its physics is in `physics.ts` (`PhysOptions`).
 
 ## Conventions

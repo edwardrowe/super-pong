@@ -5,8 +5,9 @@ import { MAX_LEVEL } from '../../engine/music';
 import { Kind, Particles } from '../../engine/particles';
 import { Shake } from '../../engine/shake';
 import { WORLD_H, type Game, type GameContext, type Side, type View } from '../../engine/types';
-import { PHYS, serve, speedFrac, speedOf, stepBall, type Ball, type BallEvent, type Field, type Paddle, type PhysOptions } from './physics';
+import { PHYS, brake, serve, speedFrac, speedOf, stepBall, type Ball, type BallEvent, type Field, type Paddle, type PhysOptions } from './physics';
 import { POWER, PowerSchedule, grownHeight, spawnPoint, touches } from './powerups';
+import { ITEMS, Inventory, SLOW, type ItemId } from './items';
 
 // ---- look & tuning ---------------------------------------------------------
 
@@ -19,10 +20,16 @@ const COLOR = {
   bg: '#05050c',
 };
 // Particle palette indices.
-const PAL = [COLOR.white, COLOR.player[0], COLOR.player[1], COLOR.gold, COLOR.wall];
+const PAL = [COLOR.white, COLOR.player[0], COLOR.player[1], COLOR.gold, COLOR.wall, ITEMS.slow.color];
 const WHITE = 0;
 const GOLD = 3;
 const WALL = 4;
+const ICE = 5;
+/** Item slot size (world units); the slots sit at the bottom of each finger gutter. */
+const SLOT = 84;
+/** Keyboard: use your item. */
+const ITEM_KEY = ['KeyD', 'ArrowLeft'] as const;
+const ITEM_KEY_LABEL = ['D', '←'] as const;
 const pc = (s: Side) => (s === 0 ? 1 : 2);
 
 const FONT = 'Futura, "Avenir Next", "Century Gothic", "Trebuchet MS", system-ui, sans-serif';
@@ -85,6 +92,17 @@ export class SuperPong implements Game {
   /** Visual rotation of the spin marks around the ball. */
   private ballAngle = 0;
   private phys: PhysOptions = { spin: false };
+  private items = new Inventory();
+  /** Centre of each player's item slot (world units). */
+  private slots: [{ x: number; y: number }, { x: number; y: number }] = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ];
+  private slotFlash: [number, number] = [0, 0];
+  /** Seconds of slowdown braking left. */
+  private braking = 0;
+  private offButton: () => void;
+  private coarse = matchMedia('(pointer: coarse)').matches;
 
   private score: [number, number] = [0, 0];
   private scoreT: [number, number] = [99, 99];
@@ -123,6 +141,10 @@ export class SuperPong implements Game {
     this.view = g.view;
     const mk = (): PaddleState => ({ x: 0, y: WORLD_H / 2, w: PADDLE.w, h: PADDLE.h, vy: 0, squash: 0, squashV: 0, flash: 0 });
     this.paddles = [mk(), mk()];
+    this.offButton = g.input.onButton((id) => {
+      if (id === 'item0') this.useItem(0);
+      else if (id === 'item1') this.useItem(1);
+    });
     this.resize(g.view);
     g.music.newMatch();
     this.enter('intro');
@@ -145,6 +167,24 @@ export class SuperPong implements Game {
     this.trail.length = 0;
     this.grid.resize(this.field.goalR - this.field.goalL, view.h, this.field.goalL);
     this.vignette = makeVignette(view.w, view.h);
+    // Item slots: bottom of each gutter, clear of the camera cutout and the home bar.
+    const sy = view.h - Math.max(view.inset.b, 0) - SLOT / 2 - 22;
+    this.slots[0] = { x: (inset + this.field.goalL) / 2, y: sy };
+    this.slots[1] = { x: (this.field.goalR + view.w - inset) / 2, y: sy };
+    this.g.input.setButtons(
+      this.slots.map((sl, i) => ({
+        id: `item${i}`,
+        x: (sl.x - SLOT / 2) * view.scale,
+        y: (sl.y - SLOT / 2) * view.scale,
+        w: SLOT * view.scale,
+        h: SLOT * view.scale,
+      })),
+    );
+  }
+
+  dispose(): void {
+    this.offButton();
+    this.g.input.setButtons([]);
   }
 
   /** Centre of the play area (between the goal lines). */
@@ -158,6 +198,7 @@ export class SuperPong implements Game {
       this.scoreT = [99, 99];
       this.grows = [0, 0];
       this.growT = [99, 99];
+      this.items.clear();
       this.fizzlePower();
       this.g.music.newMatch();
       this.serveDir = this.winner === 0 ? 1 : -1;
@@ -185,7 +226,12 @@ export class SuperPong implements Game {
         Object.assign(this.ball, { x: w2, y: h / 2, vx: 0, vy: 0 });
         this.trail.length = 0;
         this.lastHit = -1;
+        this.braking = 0;
         this.schedule.startRally();
+        // Everyone gets a slowdown each point (it doesn't stack).
+        for (const side of [0, 1] as const) {
+          if (!this.items.has(side, 'slow') && this.items.give(side, 'slow')) this.slotFlash[side] = 0.6;
+        }
         this.g.sfx.charge(SERVE_WINDUP);
         break;
       case 'play':
@@ -223,6 +269,10 @@ export class SuperPong implements Game {
     const sdt = dt * this.timeScale;
 
     this.phys.spin = this.g.settings.get('spin');
+    for (const side of [0, 1] as const) {
+      if (this.g.input.consumeKey(ITEM_KEY[side])) this.useItem(side);
+      this.slotFlash[side] = Math.max(0, this.slotFlash[side] - dt * 2.5);
+    }
     this.updatePaddles(dt);
     this.phaseT += sdt;
     this.ballAngle += (this.ball.spin ?? 0) * 7 * sdt;
@@ -290,6 +340,10 @@ export class SuperPong implements Game {
     while (this.acc >= STEP) {
       this.acc -= STEP;
       this.events.length = 0;
+      if (this.braking > 0) {
+        brake(this.ball, SLOW.toSpeed, SLOW.rate, STEP);
+        this.braking -= STEP;
+      }
       const goal = stepBall(this.ball, this.paddles, this.field, STEP, this.events, this.phys);
       this.trail.push({ x: this.ball.x, y: this.ball.y });
       if (this.trail.length > TRAIL_LEN) this.trail.shift();
@@ -398,10 +452,17 @@ export class SuperPong implements Game {
   }
 
   /** Power-up kinds the Debug screen can award. */
-  readonly powerUps = [{ id: 'grow', name: 'Paddle grower' }];
+  readonly powerUps = [
+    { id: 'grow', name: 'Paddle grower' },
+    { id: 'slow', name: 'Slowdown' },
+  ];
 
   /** Debug: give a player power-ups, with the usual pickup show (sparks come from mid-court). */
   award(side: Side, id: string, count: number): void {
+    if (id in ITEMS) {
+      for (let i = 0; i < count; i++) if (this.items.give(side, id as ItemId)) this.slotFlash[side] = 1;
+      return;
+    }
     if (id !== 'grow') return;
     const p = this.paddles[side];
     const x = p.x + (side === 0 ? 1 : -1) * 260;
@@ -463,6 +524,48 @@ export class SuperPong implements Game {
     this.g.sfx.powerUp(pan, false);
     this.g.sfx.warp(0.25, pan);
     buzz(max ? [30, 40, 60] : 30);
+  }
+
+  // ---- items -----------------------------------------------------------------
+
+  /** Fire the item in a player's slot. Only while the ball is live; otherwise they keep it. */
+  private useItem(side: Side): void {
+    if (this.phase !== 'play') return;
+    const item = this.items.take(side);
+    if (!item) return;
+    this.slotFlash[side] = 1;
+    if (item === 'slow') this.slowdown(side);
+  }
+
+  /** Brake the ball back to serve speed: a time-freeze ripple, ice sparks, a tape-stop dive. */
+  private slowdown(side: Side): void {
+    this.braking = SLOW.duration;
+    this.timeScale = 0.35;
+    const { x, y } = this.ball;
+    const ice = ITEMS.slow.color;
+    const pan = (x / this.field.w) * 2 - 1;
+    this.rings.push(
+      { x, y, t: 0, dur: 0.5, maxR: 260, color: ice, width: 6 },
+      { x, y, t: -0.1, dur: 0.7, maxR: 520, color: ice, width: 3 },
+      { x, y, t: -0.2, dur: 0.9, maxR: 820, color: COLOR.white, width: 2 },
+    );
+    this.particles.burst(x, y, { count: 70, color: [ICE, ICE, WHITE], speed: [100, 700], life: [0.4, 1.0], drag: 5 });
+    // Frost streams from the slot that fired it to the ball.
+    const sl = this.slots[side];
+    for (let i = 0; i < 24; i++) {
+      const life = 0.25 + Math.random() * 0.2;
+      const tx = x + (Math.random() - 0.5) * 30;
+      const ty = y + (Math.random() - 0.5) * 30;
+      this.particles.spawn(sl.x, sl.y, (tx - sl.x) / life, (ty - sl.y) / life, life, 3, Math.random() < 0.6 ? ICE : WHITE, Kind.Streak, 0);
+    }
+    this.popups.push({ x, y: y - 70, t: 0, text: 'SLOWDOWN', color: ice });
+    this.grid.impulse(x, y, -900, 420);
+    this.flash = 0.25;
+    this.flashColor = ice;
+    this.shake.add(0.25);
+    this.g.sfx.slowdown(pan);
+    this.g.sfx.warp(0.45, pan);
+    buzz(40);
   }
 
   /** A new match started with a power-up still on court: it pops quietly. */
@@ -540,12 +643,58 @@ export class SuperPong implements Game {
 
     ctx.globalCompositeOperation = 'source-over';
     if (this.vignette) ctx.drawImage(this.vignette, 0, 0, w, h);
+    ctx.globalCompositeOperation = 'lighter';
     if (this.flash > 0) {
-      ctx.globalCompositeOperation = 'lighter';
       ctx.fillStyle = rgba(this.flashColor, this.flash * 0.45);
       ctx.fillRect(0, 0, w, h);
-      ctx.globalCompositeOperation = 'source-over';
     }
+    this.drawSlots(ctx);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /** Each player's item slot: an outlined box in their colour, the item's icon when it holds one. */
+  private drawSlots(ctx: CanvasRenderingContext2D): void {
+    for (const side of [0, 1] as const) {
+      const { x, y } = this.slots[side];
+      const item = this.items.slots[side][0];
+      const col = COLOR.player[side];
+      const pressed = this.g.input.isButtonDown(`item${side}`);
+      const f = this.slotFlash[side];
+      const half = (SLOT / 2) * (pressed ? 0.92 : 1) * (1 + f * 0.12);
+      if (f > 0) drawGlow(ctx, item ? ITEMS[item].color : col, x, y, SLOT * 2.2, f * 0.6);
+      ctx.beginPath();
+      ctx.roundRect(x - half, y - half, half * 2, half * 2, 16);
+      if (item) {
+        ctx.fillStyle = rgba(ITEMS[item].color, 0.07 + 0.04 * Math.sin(this.time * 4));
+        ctx.fill();
+      }
+      glowStroke(ctx, col, 2.5, item ? 0.7 : 0.22);
+      if (item === 'slow') this.drawHourglass(ctx, x, y - (this.coarse ? 0 : 6), half * 0.42, ITEMS.slow.color);
+      if (!this.coarse) {
+        ctx.font = `600 20px ${FONT}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = rgba(col, item ? 0.75 : 0.3);
+        ctx.fillText(ITEM_KEY_LABEL[side], x, y + half - 15);
+      }
+    }
+  }
+
+  private drawHourglass(ctx: CanvasRenderingContext2D, x: number, y: number, a: number, color: string): void {
+    const tilt = Math.sin(this.time * 2) * 0.12;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(tilt);
+    ctx.beginPath();
+    ctx.moveTo(-a, -a);
+    ctx.lineTo(a, -a);
+    ctx.lineTo(-a * 0.15, 0);
+    ctx.lineTo(a, a);
+    ctx.lineTo(-a, a);
+    ctx.lineTo(a * 0.15, 0);
+    ctx.closePath();
+    glowStroke(ctx, color, 2.6, 0.95);
+    ctx.restore();
   }
 
   private drawArena(ctx: CanvasRenderingContext2D): void {
@@ -717,6 +866,7 @@ export class SuperPong implements Game {
     const pulse = 1 + 0.1 * Math.sin(this.time * 22);
     drawGlow(ctx, this.ballColor, x, y, r * 16 * pulse, 0.5);
     drawGlow(ctx, this.ballColor, x, y, r * 5.5, 0.95);
+    if (this.braking > 0) drawGlow(ctx, ITEMS.slow.color, x, y, r * 9, 0.8);
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);

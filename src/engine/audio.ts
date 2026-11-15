@@ -257,6 +257,14 @@ export class Sfx {
     this.tone(320, 1400 + amount * 900, 0.16, 'triangle', 0.05 + amount * 0.07, pan);
   }
 
+  /** Slowdown: a falling "tape stop" with a sub drop under it. */
+  slowdown(pan: number): void {
+    this.tone(660, 70, 0.6, 'sawtooth', 0.11, pan);
+    this.tone(1320, 140, 0.45, 'triangle', 0.06, pan);
+    this.tone(220, 38, 0.75, 'sine', 0.45, pan);
+    this.noise(0.5, 0.18, 6000, 300, pan);
+  }
+
   /** A power-up appears: a quick shimmering sparkle. */
   powerSpawn(pan: number): void {
     [1320, 1760, 2217, 2637].forEach((f, i) => this.tone(f, f * 1.005, 0.18, 'sine', 0.07, pan, i * 0.045));

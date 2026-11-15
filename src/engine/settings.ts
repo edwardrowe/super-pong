@@ -12,7 +12,7 @@ export interface SettingDef {
 }
 
 export const SETTINGS: SettingDef[] = [
-  { id: 'spin', label: 'Spin', hint: 'Moving your paddle as you hit puts spin on the ball, so it curves.', default: false },
+  { id: 'spin', label: 'Spin', hint: 'Moving your paddle as you hit puts spin on the ball, so it curves.', default: true },
 ];
 
 const KEY = 'settings';
