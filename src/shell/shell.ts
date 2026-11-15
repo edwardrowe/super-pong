@@ -1,6 +1,6 @@
 import { Sfx } from '../engine/audio';
 import { Input } from '../engine/input';
-import { Music } from '../engine/music';
+import { Music, TRACKS } from '../engine/music';
 import { WORLD_H, type Game, type GameEntry, type View } from '../engine/types';
 import { GAMES } from '../games';
 import { Backdrop } from './backdrop';
@@ -31,9 +31,13 @@ export class Shell {
     resume: $('resume'),
     restart: $('restart'),
     sound: $('sound'),
-    music: $('music'),
-    menuMusic: $('menu-music'),
+    menuSound: $('menu-sound'),
     quit: $('quit'),
+    audio: $('audio'),
+    tracks: $('track-list'),
+    volMusic: $<HTMLInputElement>('vol-music'),
+    volSfx: $<HTMLInputElement>('vol-sfx'),
+    audioDone: $('audio-done'),
     diag: $('diag'),
   };
 
@@ -62,6 +66,10 @@ export class Shell {
 
     window.addEventListener('keydown', (e) => {
       if (!this.game) return;
+      if (this.audioOpen) {
+        if (e.code === 'Escape') this.closeAudio();
+        return;
+      }
       if (e.code === 'Escape' || e.code === 'KeyP') this.paused ? this.resume() : this.pause();
       else if ((e.code === 'Enter' || e.code === 'Space') && !this.paused) this.game.onPress?.(-1);
     });
@@ -91,21 +99,11 @@ export class Shell {
     this.ui.resume.addEventListener('click', () => this.resume());
     this.ui.restart.addEventListener('click', () => this.entry && this.start(this.entry));
     this.ui.quit.addEventListener('click', () => this.quit());
-    this.ui.sound.addEventListener('click', () => {
-      this.sfx.setMuted(!this.sfx.muted);
-      this.syncSoundLabel();
-      this.sfx.click();
-    });
-    const toggleMusic = () => {
-      this.music.cycle();
-      this.syncSoundLabel();
-      this.sfx.click();
-    };
-    this.ui.music.addEventListener('click', toggleMusic);
-    this.ui.menuMusic.addEventListener('click', toggleMusic);
-    this.music.setIntensity(0.25);
-    this.music.setTempo(1);
-    this.syncSoundLabel();
+    this.ui.sound.addEventListener('click', () => this.openAudio());
+    this.ui.menuSound.addEventListener('click', () => this.openAudio());
+    this.ui.audioDone.addEventListener('click', () => this.closeAudio());
+    this.buildAudioPanel();
+    this.music.setLevel(0);
 
     this.resize();
     let last = performance.now();
@@ -197,18 +195,81 @@ export class Shell {
     this.entry = null;
     this.paused = false;
     this.music.muffle(false);
-    this.music.setIntensity(0.25);
-    this.music.setTempo(1);
+    this.music.setLevel(0);
     this.ui.pause.classList.add('hidden');
     this.ui.pauseBtn.classList.add('hidden');
     this.ui.menu.classList.remove('hidden');
   }
 
-  private syncSoundLabel(): void {
-    this.ui.sound.textContent = this.sfx.muted ? 'Sound: Off' : 'Sound: On';
-    const m = this.music.label;
-    this.ui.music.textContent = m;
-    this.ui.menuMusic.textContent = m;
+  // ---- sound panel ---------------------------------------------------------
+
+  private get audioOpen(): boolean {
+    return !this.ui.audio.classList.contains('hidden');
+  }
+
+  private buildAudioPanel(): void {
+    for (const t of TRACKS) {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.setAttribute('role', 'radio');
+      b.dataset.id = t.id;
+      b.textContent = t.name;
+      b.addEventListener('click', () => {
+        this.music.select(t.id);
+        if (this.music.volume === 0) this.music.setVolume(0.75);
+        this.sfx.click();
+        this.syncAudioPanel();
+      });
+      this.ui.tracks.appendChild(b);
+    }
+    let lastPreview = 0;
+    this.ui.volMusic.addEventListener('input', () => {
+      this.music.setVolume(Number(this.ui.volMusic.value) / 100);
+      this.syncAudioPanel();
+    });
+    this.ui.volSfx.addEventListener('input', () => {
+      this.sfx.setVolume(Number(this.ui.volSfx.value) / 100);
+      this.syncAudioPanel();
+      // Let the player hear the new level while dragging.
+      const now = performance.now();
+      if (now - lastPreview > 140) {
+        lastPreview = now;
+        this.sfx.paddle(0.3, 0);
+      }
+    });
+    this.syncAudioPanel();
+  }
+
+  private syncAudioPanel(): void {
+    for (const b of this.ui.tracks.children) {
+      (b as HTMLElement).setAttribute('aria-checked', String((b as HTMLElement).dataset.id === this.music.trackId));
+    }
+    const set = (input: HTMLInputElement, v: number) => {
+      const pct = Math.round(v * 100);
+      input.value = String(pct);
+      input.style.setProperty('--fill', `${pct}%`);
+      (input.nextElementSibling as HTMLOutputElement).textContent = pct ? String(pct) : 'Off';
+    };
+    set(this.ui.volMusic, this.music.volume);
+    set(this.ui.volSfx, this.sfx.volume);
+  }
+
+  private openAudio(): void {
+    this.sfx.click();
+    this.syncAudioPanel();
+    this.ui.audio.classList.remove('hidden');
+    this.ui.pause.classList.add('hidden');
+    this.ui.menu.classList.add('hidden');
+    this.music.muffle(false); // hear the track you pick, even from the pause screen
+  }
+
+  private closeAudio(): void {
+    this.sfx.click();
+    this.ui.audio.classList.add('hidden');
+    if (this.game) {
+      this.ui.pause.classList.remove('hidden');
+      this.music.muffle(this.paused);
+    } else this.ui.menu.classList.remove('hidden');
   }
 }
 

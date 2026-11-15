@@ -1,3 +1,5 @@
+import { readVolume } from './music';
+
 /**
  * Synthesised sound effects — no audio files. Browsers only allow audio after a user
  * gesture, so call unlock() from a pointer/key handler.
@@ -10,7 +12,8 @@ export class Sfx {
   bus: AudioNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
   private drive: Float32Array<ArrayBuffer> | null = null;
-  muted = localStorage.getItem('muted') === '1';
+  /** 0..1 (slider position). Older versions had an on/off switch stored as 'muted'. */
+  volume = readVolume('sfxVol', localStorage.getItem('muted') === '1' ? 0 : 0.75);
 
   unlock(): void {
     if (!this.ctx) {
@@ -21,7 +24,7 @@ export class Sfx {
       comp.threshold.value = -14;
       comp.ratio.value = 6;
       this.master = this.ctx.createGain();
-      this.master.gain.value = this.muted ? 0 : 0.55;
+      this.master.gain.value = sfxGain(this.volume);
       this.master.connect(comp).connect(this.ctx.destination);
       this.bus = comp;
       const len = this.ctx.sampleRate;
@@ -41,10 +44,10 @@ export class Sfx {
     if (this.ctx?.state === 'running') void this.ctx.suspend();
   }
 
-  setMuted(m: boolean): void {
-    this.muted = m;
-    localStorage.setItem('muted', m ? '1' : '0');
-    if (this.master) this.master.gain.value = m ? 0 : 0.55;
+  setVolume(v: number): void {
+    this.volume = Math.max(0, Math.min(1, v));
+    localStorage.setItem('sfxVol', String(this.volume));
+    if (this.master && this.ctx) this.master.gain.setTargetAtTime(sfxGain(this.volume), this.ctx.currentTime, 0.02);
   }
 
   // ---- game sounds -------------------------------------------------------
@@ -255,7 +258,7 @@ export class Sfx {
   // ---- primitives --------------------------------------------------------
 
   private out(pan: number): AudioNode | null {
-    if (!this.ctx || !this.master || this.muted) return null;
+    if (!this.ctx || !this.master || this.volume <= 0) return null;
     if (pan === 0 || !this.ctx.createStereoPanner) return this.master;
     const p = this.ctx.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, pan));
@@ -297,6 +300,11 @@ export class Sfx {
     src.start(t);
     src.stop(t + dur + 0.02);
   }
+}
+
+/** Squared so the slider feels even; the default position (0.75) gives the original 0.55. */
+function sfxGain(v: number): number {
+  return 0.98 * v * v;
 }
 
 /** Short vibration. Works on Android; iPhones ignore it. */

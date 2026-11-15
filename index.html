@@ -17,7 +17,7 @@
     <canvas id="screen"></canvas>
 
     <div id="menu" class="overlay">
-      <button id="menu-music" class="corner neon">Music: On</button>
+      <button id="menu-sound" class="corner neon">Sound</button>
       <div class="kicker">2 players · 1 phone</div>
       <h1 class="title">Pick a game</h1>
       <div id="game-list" class="cards"></div>
@@ -31,11 +31,18 @@
       <div class="row">
         <button id="resume" class="neon">Resume</button>
         <button id="restart" class="neon">Restart</button>
-        <button id="sound" class="neon">Sound: On</button>
-        <button id="music" class="neon">Music: On</button>
+        <button id="sound" class="neon">Sound</button>
         <button id="quit" class="neon">Menu</button>
       </div>
       <p id="diag" class="hint diag"></p>
+    </div>
+
+    <div id="audio" class="overlay hidden">
+      <h2 class="title small">Sound</h2>
+      <div id="track-list" class="chips" role="radiogroup" aria-label="Music track"></div>
+      <label class="slider"><span>Music</span><input id="vol-music" type="range" min="0" max="100" step="1" /><output id="vol-music-out"></output></label>
+      <label class="slider"><span>Effects</span><input id="vol-sfx" type="range" min="0" max="100" step="1" /><output id="vol-sfx-out"></output></label>
+      <button id="audio-done" class="neon">Done</button>
     </div>
 
     <div id="rotate" class="overlay">

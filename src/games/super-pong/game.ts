@@ -1,6 +1,7 @@
 import { buzz } from '../../engine/audio';
 import { drawGlow, glowLine, glowRect, glowRing, glowStroke, rgba, whiten } from '../../engine/glow';
 import { SpringGrid } from '../../engine/grid';
+import { MAX_LEVEL } from '../../engine/music';
 import { Kind, Particles } from '../../engine/particles';
 import { Shake } from '../../engine/shake';
 import { WORLD_H, type Game, type GameContext, type Side, type View } from '../../engine/types';
@@ -211,10 +212,9 @@ export class SuperPong implements Game {
         break;
     }
 
-    this.g.music.setIntensity(this.musicIntensity());
-    // Push the tempo when someone is one point from winning, and again on the win screen.
+    // The arrangement gains an instrument for every point the leader scores, peaking on the win screen.
     const top = Math.max(this.score[0], this.score[1]);
-    this.g.music.setTempo(this.phase === 'won' ? 1.2 : top >= WIN_SCORE - 1 ? 1.1 : 1);
+    this.g.music.setLevel(this.phase === 'won' ? MAX_LEVEL : Math.min(MAX_LEVEL - 1, 1 + top));
     this.particles.update(sdt);
     this.grid.update(sdt);
     for (const r of this.rings) r.t += sdt;
@@ -223,18 +223,6 @@ export class SuperPong implements Game {
     this.wallHits = this.wallHits.filter((w) => w.t < 0.35);
     this.scoreT[0] += dt;
     this.scoreT[1] += dt;
-  }
-
-  /** The soundtrack builds as rallies get faster and peaks on the win screen. */
-  private musicIntensity(): number {
-    switch (this.phase) {
-      case 'play':
-        return 0.62 + 0.38 * speedFrac(speedOf(this.ball));
-      case 'won':
-        return 1;
-      default:
-        return 0.5;
-    }
   }
 
   private updatePaddles(dt: number): void {

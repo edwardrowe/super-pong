@@ -58,7 +58,8 @@ canvas {
   text-align: center;
 }
 
-#pause {
+#pause,
+#audio {
   background: rgba(5, 5, 12, 0.7);
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
@@ -175,6 +176,109 @@ canvas {
   right: max(12px, env(safe-area-inset-right));
   padding: 8px 14px;
   font-size: clamp(12px, 3.6vh, 15px);
+}
+
+#audio {
+  gap: 2vh;
+  z-index: 3;
+}
+
+.title.small {
+  font-size: clamp(22px, 8vh, 48px);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 640px;
+}
+
+.chip {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(24, 240, 255, 0.35);
+  background: transparent;
+  color: #cfefff;
+  font-family: inherit;
+  font-size: clamp(12px, 3.8vh, 16px);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.chip[aria-checked='true'] {
+  border-color: var(--cyan);
+  background: rgba(24, 240, 255, 0.15);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(24, 240, 255, 0.6);
+}
+
+.slider {
+  display: grid;
+  grid-template-columns: 5.5em minmax(160px, 340px) 3em;
+  align-items: center;
+  gap: 14px;
+  font-size: clamp(13px, 4vh, 17px);
+  letter-spacing: 0.05em;
+  text-align: left;
+}
+
+.slider output {
+  text-align: right;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.slider input {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 36px;
+  margin: 0;
+  background: transparent;
+  touch-action: pan-x;
+  cursor: pointer;
+  --fill: 75%;
+}
+
+.slider input::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--cyan), var(--magenta)) 0 / var(--fill) 100% no-repeat, rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 10px rgba(140, 100, 255, 0.5);
+}
+
+.slider input::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.slider input::-moz-range-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--cyan), var(--magenta));
+}
+
+.slider input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px;
+  height: 26px;
+  margin-top: -10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: var(--bg);
+  box-shadow: 0 0 12px var(--cyan);
+}
+
+.slider input::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: var(--bg);
+  box-shadow: 0 0 12px var(--cyan);
 }
 
 .neon:active {
