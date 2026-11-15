@@ -190,15 +190,90 @@ canvas {
   left: max(12px, env(safe-area-inset-left));
 }
 
-/* Debug settings: a scrolling list of switches, so it can grow. */
-.toggles {
+/* Debug settings: switches and award counters in one scrolling column, so it can grow. */
+.debug-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: min(560px, 100%);
-  max-height: 58vh;
+  gap: 12px;
+  width: min(600px, 100%);
+  max-height: 60vh;
   overflow-y: auto;
   touch-action: pan-y;
+}
+
+.toggles,
+.awards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.award {
+  display: grid;
+  grid-template-columns: 1fr 130px 130px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(143, 107, 255, 0.35);
+  background: rgba(143, 107, 255, 0.08);
+  text-align: left;
+  font-size: clamp(14px, 4.4vh, 18px);
+}
+
+.award.head {
+  padding: 0 16px;
+  border: none;
+  background: none;
+  font-size: clamp(11px, 3.2vh, 13px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.award.head span:not(:first-child) {
+  text-align: center;
+}
+
+.p0 {
+  --accent: var(--cyan);
+  color: var(--cyan);
+}
+
+.p1 {
+  --accent: var(--magenta);
+  color: var(--magenta);
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.stepper button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: #fff;
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.stepper button:active {
+  transform: scale(0.92);
+}
+
+.stepper output {
+  min-width: 1.4em;
+  text-align: center;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
 }
 
 .toggle {

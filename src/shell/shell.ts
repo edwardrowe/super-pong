@@ -44,7 +44,9 @@ export class Shell {
     menuDebug: $('menu-debug'),
     debug: $('debug'),
     debugList: $('debug-list'),
-    debugDone: $('debug-done'),
+    debugAwards: $('debug-awards'),
+    debugSave: $('debug-save'),
+    debugCancel: $('debug-cancel'),
     diag: $('diag'),
   };
 
@@ -109,9 +111,10 @@ export class Shell {
     this.ui.sound.addEventListener('click', () => this.openAudio());
     this.ui.menuSound.addEventListener('click', () => this.openAudio());
     this.ui.audioDone.addEventListener('click', () => this.closePanel());
-    this.ui.debugBtn.addEventListener('click', () => this.openPanel(this.ui.debug));
-    this.ui.menuDebug.addEventListener('click', () => this.openPanel(this.ui.debug));
-    this.ui.debugDone.addEventListener('click', () => this.closePanel());
+    this.ui.debugBtn.addEventListener('click', () => this.openDebug());
+    this.ui.menuDebug.addEventListener('click', () => this.openDebug());
+    this.ui.debugSave.addEventListener('click', () => this.saveDebug());
+    this.ui.debugCancel.addEventListener('click', () => this.closePanel());
     this.buildDebugPanel();
     this.buildAudioPanel();
     this.music.setLevel(0);
@@ -237,7 +240,12 @@ export class Shell {
     } else this.ui.menu.classList.remove('hidden');
   }
 
-  /** One switch per entry in SETTINGS; changes save immediately and apply live. */
+  /** Debug changes wait here until Save. */
+  private pendingSettings = new Map<string, boolean>();
+  /** Queued awards, keyed `${powerUpId}:${side}`. */
+  private pendingAwards = new Map<string, number>();
+
+  /** One switch per entry in SETTINGS. Changes are held until Save. */
   private buildDebugPanel(): void {
     for (const def of SETTINGS) {
       const row = document.createElement('label');
@@ -246,14 +254,75 @@ export class Shell {
       row.querySelector('b')!.textContent = def.label;
       row.querySelector('small')!.textContent = def.hint;
       const box = row.querySelector('input')!;
-      box.checked = this.settings.get(def.id);
+      box.dataset.id = def.id;
       box.addEventListener('change', () => {
-        this.settings.set(def.id, box.checked);
+        this.pendingSettings.set(def.id, box.checked);
         this.sfx.click();
       });
       this.ui.debugList.appendChild(row);
     }
   }
+
+  private openDebug(): void {
+    this.pendingSettings.clear();
+    this.pendingAwards.clear();
+    for (const box of this.ui.debugList.querySelectorAll('input')) box.checked = this.settings.get(box.dataset.id!);
+    this.buildAwards();
+    this.openPanel(this.ui.debug);
+  }
+
+  /** A row per power-up kind with a −/+ counter for each player. Only during a game. */
+  private buildAwards(): void {
+    const box = this.ui.debugAwards;
+    box.replaceChildren();
+    const kinds = this.game?.award ? (this.game.powerUps ?? []) : [];
+    if (!kinds.length) {
+      box.innerHTML = '<p class="hint">Start a game to award power-ups.</p>';
+      return;
+    }
+    const head = document.createElement('div');
+    head.className = 'award head';
+    head.innerHTML = '<span>Award power-ups</span><span class="p0">Cyan</span><span class="p1">Magenta</span>';
+    box.appendChild(head);
+    for (const kind of kinds) {
+      const row = document.createElement('div');
+      row.className = 'award';
+      const name = document.createElement('span');
+      name.textContent = kind.name;
+      row.appendChild(name);
+      for (const side of [0, 1] as const) {
+        const key = `${kind.id}:${side}`;
+        const step = document.createElement('div');
+        step.className = `stepper p${side}`;
+        step.innerHTML = '<button aria-label="One fewer">−</button><output>0</output><button aria-label="One more">+</button>';
+        const [minus, plus] = step.querySelectorAll('button');
+        const out = step.querySelector('output')!;
+        const change = (d: number) => {
+          const n = Math.max(0, Math.min(9, (this.pendingAwards.get(key) ?? 0) + d));
+          this.pendingAwards.set(key, n);
+          out.textContent = String(n);
+          this.sfx.click();
+        };
+        minus.addEventListener('click', () => change(-1));
+        plus.addEventListener('click', () => change(1));
+        row.appendChild(step);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  /** Apply the held settings and queued awards, then close. */
+  private saveDebug(): void {
+    for (const [id, v] of this.pendingSettings) this.settings.set(id, v);
+    for (const [key, n] of this.pendingAwards) {
+      const [id, side] = key.split(':');
+      if (n > 0) this.game?.award?.(Number(side) as 0 | 1, id, n);
+    }
+    this.pendingSettings.clear();
+    this.pendingAwards.clear();
+    this.closePanel();
+  }
+
 
   private buildAudioPanel(): void {
     for (const t of [{ id: 'shuffle', name: 'Shuffle' }, ...TRACKS]) {

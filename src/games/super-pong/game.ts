@@ -158,6 +158,7 @@ export class SuperPong implements Game {
       this.scoreT = [99, 99];
       this.grows = [0, 0];
       this.growT = [99, 99];
+      this.fizzlePower();
       this.g.music.newMatch();
       this.serveDir = this.winner === 0 ? 1 : -1;
       this.enter('intro');
@@ -198,7 +199,6 @@ export class SuperPong implements Game {
         break;
       case 'scored':
         this.ballVisible = false;
-        this.fizzlePower();
         break;
       case 'won':
         this.fireworkT = 0.15;
@@ -397,42 +397,75 @@ export class SuperPong implements Game {
     this.g.sfx.warp(0.08, pan);
   }
 
+  /** Power-up kinds the Debug screen can award. */
+  readonly powerUps = [{ id: 'grow', name: 'Paddle grower' }];
+
+  /** Debug: give a player power-ups, with the usual pickup show (sparks come from mid-court). */
+  award(side: Side, id: string, count: number): void {
+    if (id !== 'grow') return;
+    const p = this.paddles[side];
+    const x = p.x + (side === 0 ? 1 : -1) * 260;
+    for (let i = 0; i < count && this.grows[side] < POWER.maxGrows; i++) this.grow(side, x, p.y, i === count - 1);
+  }
+
   private collect(side: Side, pw: PowerUp): void {
     this.power = null;
-    const maxed = this.grows[side] >= POWER.maxGrows;
-    if (!maxed) {
-      this.grows[side]++;
-      this.growT[side] = 0;
+    if (this.grows[side] < POWER.maxGrows) {
+      this.grow(side, pw.x, pw.y, true);
+      return;
     }
+    // Already full size: the ball still takes it, but nothing happens.
+    this.particles.burst(pw.x, pw.y, { count: 30, color: [GOLD, WHITE], speed: [100, 500], life: [0.2, 0.5], drag: 3 });
+    this.rings.push({ x: pw.x, y: pw.y, t: 0, dur: 0.3, maxR: 110, color: COLOR.gold, width: 3 });
+    this.popups.push({ x: pw.x, y: pw.y - 60, t: 0, text: 'MAX SIZE', color: COLOR.player[side] });
+    this.g.sfx.powerUp((pw.x / this.field.w) * 2 - 1, true);
+  }
+
+  /** One paddle grower for `side`; sparks fly from (x, y) to the paddle. The fifth fuses it. */
+  private grow(side: Side, x: number, y: number, popup: boolean): void {
+    this.grows[side]++;
+    this.growT[side] = 0;
+    const max = this.grows[side] >= POWER.maxGrows;
     const col = COLOR.player[side];
     const ci = pc(side);
     const p = this.paddles[side];
-    const pan = (pw.x / this.field.w) * 2 - 1;
-    this.particles.burst(pw.x, pw.y, { count: 90, color: [GOLD, GOLD, ci, WHITE], speed: [150, 900], life: [0.3, 0.8], drag: 2.5 });
+    const pan = (x / this.field.w) * 2 - 1;
+    this.particles.burst(x, y, { count: 90, color: [GOLD, GOLD, ci, WHITE], speed: [150, 900], life: [0.3, 0.8], drag: 2.5 });
     // A stream of sparks flies from the pickup to the paddle that earned it.
     for (let i = 0; i < 28; i++) {
       const life = 0.3 + Math.random() * 0.25;
       const tx = p.x + (Math.random() - 0.5) * 20;
       const ty = p.y + (Math.random() - 0.5) * p.h;
-      const sx = pw.x + (Math.random() - 0.5) * 40;
-      const sy = pw.y + (Math.random() - 0.5) * 40;
+      const sx = x + (Math.random() - 0.5) * 40;
+      const sy = y + (Math.random() - 0.5) * 40;
       this.particles.spawn(sx, sy, (tx - sx) / life, (ty - sy) / life, life, 3, Math.random() < 0.5 ? ci : GOLD, Kind.Streak, 0);
     }
     this.rings.push(
-      { x: pw.x, y: pw.y, t: 0, dur: 0.4, maxR: 220, color: COLOR.gold, width: 5 },
+      { x, y, t: 0, dur: 0.4, maxR: 220, color: COLOR.gold, width: 5 },
       { x: p.x, y: p.y, t: -0.3, dur: 0.4, maxR: p.h * 0.9, color: col, width: 4 },
     );
-    this.popups.push({ x: pw.x, y: pw.y - 60, t: 0, text: maxed ? 'MAX SIZE' : 'PADDLE UP', color: col });
+    if (max) {
+      // Fusing into one big paddle: a white-hot flash and a bigger shockwave.
+      this.rings.push(
+        { x: p.x, y: p.y, t: -0.35, dur: 0.6, maxR: 420, color: COLOR.white, width: 7 },
+        { x: p.x, y: p.y, t: -0.45, dur: 0.9, maxR: 700, color: col, width: 4 },
+      );
+      this.particles.burst(p.x, p.y, { count: 120, color: [ci, ci, WHITE], speed: [200, 1200], life: [0.3, 0.9], drag: 2 });
+      this.grid.impulse(p.x, p.y, 1400, 420);
+      this.shake.add(0.5);
+      this.g.sfx.warp(0.6, (p.x / this.field.w) * 2 - 1);
+    }
+    if (popup) this.popups.push({ x, y: y - 60, t: 0, text: max ? 'MAX SIZE' : 'PADDLE UP', color: col });
     p.flash = 1;
-    p.squashV = 14;
-    this.grid.impulse(pw.x, pw.y, 700, 300);
+    p.squashV = max ? 22 : 14;
+    this.grid.impulse(x, y, 700, 300);
     this.shake.add(0.3);
-    this.g.sfx.powerUp(pan, maxed);
+    this.g.sfx.powerUp(pan, false);
     this.g.sfx.warp(0.25, pan);
-    buzz(30);
+    buzz(max ? [30, 40, 60] : 30);
   }
 
-  /** The point ended with a power-up still on court: it pops quietly. */
+  /** A new match started with a power-up still on court: it pops quietly. */
   private fizzlePower(): void {
     const pw = this.power;
     if (!pw) return;
@@ -641,8 +674,9 @@ export class SuperPong implements Game {
   }
 
   /**
-   * The paddle's own length in its colour, plus one gold segment at each end per paddle grower
-   * collected — so the size shows on the paddle itself. Full size pulses gold.
+   * The paddle's own length plus one segment at each end per paddle grower collected, all in the
+   * player's colour, so the size shows on the paddle itself. The fifth fuses it into one solid
+   * paddle that pulses.
    */
   private drawPaddles(ctx: CanvasRenderingContext2D): void {
     for (const side of [0, 1] as const) {
@@ -653,25 +687,25 @@ export class SuperPong implements Game {
       const touch = this.g.input.isTouching(side) ? 0.15 : 0;
       const w = p.w * 0.72 * sx;
       const n = this.grows[side];
-      const maxed = n >= POWER.maxGrows;
-      const glowA = 0.1 + p.flash * 0.35 + touch * 0.3;
-      drawGlow(ctx, maxed ? COLOR.gold : col, p.x, p.y, p.h * 1.5, maxed ? glowA + 0.08 + 0.06 * Math.sin(this.time * 5) : glowA);
+      const fused = n >= POWER.maxGrows;
+      const pulse = fused ? 0.1 + 0.08 * Math.sin(this.time * 5) : 0;
+      drawGlow(ctx, col, p.x, p.y, p.h * 1.5, 0.1 + p.flash * 0.35 + touch * 0.3 + pulse);
       const coreCol = p.flash > 0 ? whiten(col, p.flash * 0.7) : col;
+      const bright = 0.85 + p.flash * 0.5 + touch + pulse;
       const ext = p.h - PADDLE.h; // grows (and shrinks back) smoothly
-      const segs = Math.max(n, ext > 1 ? 1 : 0);
+      const segs = fused ? 0 : Math.max(n, ext > 1 ? 1 : 0);
       if (segs === 0) {
-        glowRect(ctx, p.x, p.y, w, p.h * sy, coreCol, 0.85 + p.flash * 0.5 + touch);
+        glowRect(ctx, p.x, p.y, w, p.h * sy, coreCol, bright);
         continue;
       }
-      glowRect(ctx, p.x, p.y, w, PADDLE.h * sy, coreCol, 0.85 + p.flash * 0.5 + touch);
+      glowRect(ctx, p.x, p.y, w, PADDLE.h * sy, coreCol, bright);
       const seg = ext / 2 / segs;
-      const gap = Math.min(5, seg * 0.3);
+      const gap = Math.min(6, seg * 0.35);
       for (let i = 0; i < segs; i++) {
         const newest = i === n - 1 ? Math.exp(-4 * this.growT[side]) : 0;
-        const segCol = whiten(COLOR.gold, 0.15 + newest * 0.6);
-        const off = (PADDLE.h / 2 + seg * (i + 0.5)) * sy;
+        const off = (PADDLE.h / 2 + seg * (i + 0.5) + gap / 4) * sy;
         const len = Math.max(0, (seg - gap) * sy);
-        for (const dir of [-1, 1]) glowRect(ctx, p.x, p.y + dir * off, w, len, segCol, 0.8 + newest + touch);
+        for (const dir of [-1, 1]) glowRect(ctx, p.x, p.y + dir * off, w, len, whiten(coreCol, newest * 0.6), bright * 0.85 + newest);
       }
     }
   }

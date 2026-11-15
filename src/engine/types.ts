@@ -40,6 +40,10 @@ export interface Game {
   /** A finger went down on one half of the screen, or a confirm key was pressed (side = -1). */
   onPress?(side: Side | -1): void;
   dispose?(): void;
+  /** Power-up kinds the Debug screen can award, if the game has any. */
+  readonly powerUps?: { id: string; name: string }[];
+  /** Debug: give `side` this many of a power-up. */
+  award?(side: Side, id: string, count: number): void;
 }
 
 export interface GameEntry {
