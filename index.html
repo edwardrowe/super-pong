@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#05050c" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Super Pong" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <title>Super Pong</title>
+  </head>
+  <body>
+    <canvas id="screen"></canvas>
+
+    <div id="menu" class="overlay">
+      <div class="kicker">2 players · 1 phone</div>
+      <h1 class="title">Pick a game</h1>
+      <div id="game-list" class="cards"></div>
+      <p class="hint">Swipe up and down on your half of the screen to move your paddle.<br />Keyboard: W / S and ↑ / ↓ · Esc to pause</p>
+    </div>
+
+    <button id="pause-btn" class="hidden" aria-label="Pause"><span></span><span></span></button>
+
+    <div id="pause" class="overlay hidden">
+      <h2 class="title">Paused</h2>
+      <div class="row">
+        <button id="resume" class="neon">Resume</button>
+        <button id="restart" class="neon">Restart</button>
+        <button id="sound" class="neon">Sound: On</button>
+        <button id="quit" class="neon">Menu</button>
+      </div>
+    </div>
+
+    <div id="rotate" class="overlay">
+      <div class="phone"></div>
+      <p>Turn your phone sideways</p>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
