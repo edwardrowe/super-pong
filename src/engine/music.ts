@@ -1,35 +1,78 @@
 /**
- * An original electronic dance loop synthesised live with Web Audio — no audio files, nothing
- * to license. 128 BPM in A minor (Am – F – C – G). Layers come in as intensity rises:
+ * Original electronic dance loops synthesised live with Web Audio — no audio files, nothing
+ * to license. Each track is just data (tempo, chords, 16-step patterns). Layers come in as
+ * the game raises the intensity:
  *
  *   0.00  supersaw pad
  *   0.20  kick + offbeat hats
- *   0.40  rolling offbeat bass
+ *   0.40  bassline
  *   0.45  claps, and a clap build-up at the end of every 8 bars
  *   0.60  arpeggio (its filter opens further as intensity rises)
+ *   0.70  chord stabs (tracks that have them)
  *   0.80  16th-note hats
  *
- * Pad, bass and arp are "sidechained" to the kick (they duck on every beat) for the classic pump.
+ * Pad, bass, arp and stabs are "sidechained" to the kick (they duck on every beat) for the pump.
  */
 
-const BPM = 128;
-const STEP = 60 / BPM / 4; // a 16th note
-const LOOKAHEAD = 0.15;
+export interface Track {
+  id: string;
+  name: string;
+  bpm: number;
+  /** One chord (MIDI notes) per bar, looping. */
+  chords: number[][];
+  /** Bass root (MIDI) per bar. */
+  bass: number[];
+  /** 16-step patterns: 'x' = hit. */
+  kick: string;
+  clap: string;
+  ohat: string;
+  bassline: string;
+  stab?: string;
+  /** Index into [chord, chord + octave] for each 16th. */
+  arp: number[];
+}
 
-const mtof = (m: number) => 440 * 2 ** ((m - 69) / 12);
-
-const CHORDS = [
-  [57, 60, 64], // Am
-  [53, 57, 60], // F
-  [55, 60, 64], // C
-  [55, 59, 62], // G
+export const TRACKS: Track[] = [
+  {
+    id: 'neon-drive',
+    name: 'Neon Drive',
+    bpm: 128,
+    chords: [
+      [57, 60, 64], // Am
+      [53, 57, 60], // F
+      [55, 60, 64], // C
+      [55, 59, 62], // G
+    ],
+    bass: [33, 29, 36, 31],
+    kick: 'x...x...x...x...',
+    clap: '....x.......x...',
+    ohat: '..x...x...x...x.',
+    bassline: '..x...x.x.x...xx',
+    arp: [0, 2, 4, 1, 3, 5, 2, 4, 0, 2, 4, 1, 3, 5, 4, 2],
+  },
+  {
+    id: 'hyperlight',
+    name: 'Hyperlight',
+    bpm: 150,
+    chords: [
+      [61, 64, 68], // C#m
+      [61, 64, 69], // A
+      [59, 64, 68], // E
+      [59, 63, 66], // B
+    ],
+    bass: [37, 33, 40, 35],
+    kick: 'x...x...x...x...',
+    clap: '....x.......x...',
+    ohat: '..x...x...x...x.',
+    bassline: '.xxx.xxx.xxx.xxx',
+    stab: 'x..x..x...x.x...',
+    arp: [0, 1, 2, 3, 4, 5, 3, 4, 2, 3, 4, 5, 3, 4, 5, 4],
+  },
 ];
-const BASS = [33, 29, 36, 31];
-const KICK = 'x...x...x...x...';
-const CLAP = '....x.......x...';
-const OHAT = '..x...x...x...x.';
-const BASSLINE = '..x...x.x.x...xx';
-const ARP = [0, 2, 4, 1, 3, 5, 2, 4, 0, 2, 4, 1, 3, 5, 4, 2];
+
+const LOOKAHEAD = 0.15;
+const mtof = (m: number) => 440 * 2 ** ((m - 69) / 12);
+const stepOf = (t: Track) => 60 / t.bpm / 4; // a 16th note
 
 export class Music {
   private ctx: AudioContext | null = null;
@@ -38,13 +81,64 @@ export class Music {
   private bus!: GainNode;
   private duck!: GainNode;
   private delayIn!: GainNode;
+  private delay!: DelayNode;
   private noise!: AudioBuffer;
   private step = 0;
   private nextTime = 0;
   private intensity = 0.25;
   private target = 0.25;
   private volume = 0.42;
-  enabled = localStorage.getItem('music') !== '0';
+  private track: Track;
+  private pending: Track | null = null;
+  /** Selected track id, or 'off'. */
+  choice: string;
+
+  constructor() {
+    const saved = localStorage.getItem('track') ?? (localStorage.getItem('music') === '0' ? 'off' : TRACKS[0].id);
+    this.choice = saved === 'off' || TRACKS.some((t) => t.id === saved) ? saved : TRACKS[0].id;
+    this.track = TRACKS.find((t) => t.id === this.choice) ?? TRACKS[0];
+  }
+
+  get enabled(): boolean {
+    return this.choice !== 'off';
+  }
+
+  get label(): string {
+    return this.enabled ? `Music: ${this.track.name}` : 'Music: Off';
+  }
+
+  /** Step through the tracks, then off, then back to the first track. */
+  cycle(): void {
+    const ids = [...TRACKS.map((t) => t.id), 'off'];
+    this.select(ids[(ids.indexOf(this.choice) + 1) % ids.length]);
+  }
+
+  select(id: string): void {
+    const wasOn = this.enabled;
+    this.choice = id;
+    localStorage.setItem('track', id);
+    const t = TRACKS.find((x) => x.id === id);
+    if (t) {
+      if (wasOn && this.ctx) this.pending = t; // switch on the next bar line
+      else this.track = t;
+    }
+    if (!this.ctx) return;
+    if (this.enabled && !wasOn) {
+      this.step = 0;
+      this.nextTime = this.ctx.currentTime + 0.05;
+      this.applyTrack();
+    }
+    this.fadeTo(this.enabled ? this.volume : 0, 0.3);
+  }
+
+  private applyTrack(): void {
+    if (this.pending) {
+      this.track = this.pending;
+      this.pending = null;
+      this.step = 0;
+    }
+    if (this.delay) this.delay.delayTime.value = stepOf(this.track) * 3;
+  }
 
   /** Connect to an audio graph once audio is unlocked. Safe to call repeatedly. */
   attach(ctx: AudioContext, dest: AudioNode): void {
@@ -63,8 +157,8 @@ export class Music {
 
     // Dotted-eighth echo for the arp.
     this.delayIn = ctx.createGain();
-    const delay = ctx.createDelay(1);
-    delay.delayTime.value = STEP * 3;
+    const delay = (this.delay = ctx.createDelay(1));
+    delay.delayTime.value = stepOf(this.track) * 3;
     const fb = ctx.createGain();
     fb.gain.value = 0.38;
     const wet = ctx.createGain();
@@ -85,14 +179,6 @@ export class Music {
   /** 0 = sparse, 1 = everything. */
   setIntensity(v: number): void {
     this.target = Math.max(0, Math.min(1, v));
-  }
-
-  setEnabled(on: boolean): void {
-    this.enabled = on;
-    localStorage.setItem('music', on ? '1' : '0');
-    if (!this.ctx) return;
-    this.nextTime = Math.max(this.nextTime, this.ctx.currentTime + 0.05);
-    this.fadeTo(on ? this.volume : 0, 0.3);
   }
 
   /** Muffle the music (as if heard through a wall) — used while paused. */
@@ -127,35 +213,39 @@ export class Music {
     // If we fell behind (tab was suspended), skip ahead instead of firing a burst of notes.
     if (this.nextTime < ctx.currentTime - 0.05) this.nextTime = ctx.currentTime + 0.05;
     while (this.nextTime < ctx.currentTime + LOOKAHEAD) {
+      if (this.pending && this.step % 16 === 0) this.applyTrack();
       this.intensity += (this.target - this.intensity) * 0.12;
       this.playStep(this.step, this.nextTime);
       this.step++;
-      this.nextTime += STEP;
+      this.nextTime += stepOf(this.track);
     }
   }
 
   private playStep(step: number, t: number): void {
     const I = this.intensity;
+    const T = this.track;
+    const STEP = stepOf(T);
     const s = step % 16;
-    const bar = Math.floor(step / 16) % 4;
+    const bar = Math.floor(step / 16) % T.chords.length;
     const phraseBar = Math.floor(step / 16) % 8;
-    const chord = CHORDS[bar];
+    const chord = T.chords[bar];
 
     if (s === 0) this.pad(chord, t, STEP * 16, I);
     if (I >= 0.2) {
-      if (KICK[s] === 'x') this.kick(t);
-      if (OHAT[s] === 'x') this.hat(t, true);
-      if (I >= 0.8 && OHAT[s] !== 'x') this.hat(t, false);
+      if (T.kick[s] === 'x') this.kick(t, STEP);
+      if (T.ohat[s] === 'x') this.hat(t, true);
+      if (I >= 0.8 && T.ohat[s] !== 'x') this.hat(t, false);
     }
-    if (I >= 0.4 && BASSLINE[s] === 'x') this.bass(BASS[bar], t, I);
+    if (I >= 0.4 && T.bassline[s] === 'x') this.bass(T.bass[bar], t, I, STEP);
     if (I >= 0.45) {
-      if (CLAP[s] === 'x') this.clap(t, 0.32);
+      if (T.clap[s] === 'x') this.clap(t, 0.32);
       else if (phraseBar === 7 && s >= 8) this.clap(t, 0.08 + (s - 8) * 0.025); // build-up roll
     }
     if (I >= 0.6) {
       const tones = [...chord, ...chord.map((n) => n + 12)];
-      this.arp(tones[ARP[s]] + 12, t, I);
+      this.arp(tones[T.arp[s]] + 12, t, I);
     }
+    if (I >= 0.7 && T.stab?.[s] === 'x') this.stab(chord, t, I);
   }
 
   // ---- instruments ---------------------------------------------------------
@@ -166,7 +256,7 @@ export class Music {
     g.exponentialRampToValueAtTime(0.0001, t + dur);
   }
 
-  private kick(t: number): void {
+  private kick(t: number, STEP: number): void {
     const ctx = this.ctx!;
     const o = ctx.createOscillator();
     const g = ctx.createGain();
@@ -213,7 +303,7 @@ export class Music {
     g.exponentialRampToValueAtTime(0.0001, t + 0.2);
   }
 
-  private bass(m: number, t: number, I: number): void {
+  private bass(m: number, t: number, I: number, STEP: number): void {
     const ctx = this.ctx!;
     const f = ctx.createBiquadFilter();
     f.type = 'lowpass';
@@ -262,6 +352,32 @@ export class Music {
         o.connect(f);
         o.start(t);
         o.stop(t + dur + 0.02);
+      }
+    }
+  }
+
+  /** Short, bright supersaw chord hit. */
+  private stab(chord: number[], t: number, I: number): void {
+    const ctx = this.ctx!;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.Q.value = 2;
+    f.frequency.setValueAtTime(2500 + I * 4000, t);
+    f.frequency.exponentialRampToValueAtTime(700, t + 0.16);
+    const g = ctx.createGain();
+    this.env(g.gain, t, 0.07, 0.003, 0.2);
+    f.connect(g);
+    g.connect(this.duck);
+    g.connect(this.delayIn);
+    for (const n of chord) {
+      for (const det of [-18, 0, 18]) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = mtof(n + 12);
+        o.detune.value = det;
+        o.connect(f);
+        o.start(t);
+        o.stop(t + 0.22);
       }
     }
   }

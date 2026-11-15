@@ -34,6 +34,7 @@ export class Shell {
     music: $('music'),
     menuMusic: $('menu-music'),
     quit: $('quit'),
+    diag: $('diag'),
   };
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -45,6 +46,11 @@ export class Shell {
 
     this.input.onPress((side) => {
       if (this.game && !this.paused && !this.portrait.matches) this.game.onPress?.(side);
+    });
+
+    // Fullscreen is dropped when the app is backgrounded or the user swipes it away; ask again.
+    document.addEventListener('pointerup', () => {
+      if (this.game && !this.paused) tryFullscreen();
     });
 
     const unlock = () => {
@@ -91,7 +97,7 @@ export class Shell {
       this.sfx.click();
     });
     const toggleMusic = () => {
-      this.music.setEnabled(!this.music.enabled);
+      this.music.cycle();
       this.syncSoundLabel();
       this.sfx.click();
     };
@@ -168,6 +174,7 @@ export class Shell {
     if (!this.game || this.paused) return;
     this.paused = true;
     this.music.muffle(true);
+    this.ui.diag.textContent = diagnostics();
     this.ui.pause.classList.remove('hidden');
     this.ui.pauseBtn.classList.add('hidden');
   }
@@ -177,6 +184,7 @@ export class Shell {
     this.paused = false;
     this.music.muffle(false);
     this.input.reset();
+    tryFullscreen();
     this.ui.pause.classList.add('hidden');
     this.ui.pauseBtn.classList.remove('hidden');
   }
@@ -196,19 +204,32 @@ export class Shell {
 
   private syncSoundLabel(): void {
     this.ui.sound.textContent = this.sfx.muted ? 'Sound: Off' : 'Sound: On';
-    const m = this.music.enabled ? 'Music: On' : 'Music: Off';
+    const m = this.music.label;
     this.ui.music.textContent = m;
     this.ui.menuMusic.textContent = m;
   }
 }
 
 /** Android Chrome: go fullscreen and lock landscape. iPhone Safari can't; use Add to Home Screen. */
+/**
+ * Hide the phone's status and navigation bars. Requested even inside the installed app:
+ * Android sometimes opens an installed web app in "standalone" mode (status bar showing)
+ * instead of the manifest's "fullscreen", and the Fullscreen API still hides the bars there.
+ * iPhone Safari has no Fullscreen API; Add to Home Screen is the only way there.
+ */
 function tryFullscreen(): void {
-  const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches;
-  if (standalone || !matchMedia('(pointer: coarse)').matches) return;
+  if (!matchMedia('(pointer: coarse)').matches) return;
   const el = document.documentElement;
   if (!el.requestFullscreen || document.fullscreenElement) return;
   el.requestFullscreen({ navigationUI: 'hide' })
     .then(() => (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.('landscape'))
     .catch(() => {});
+}
+
+/** Small print on the pause screen to help debug display problems on a real phone. */
+function diagnostics(): string {
+  const modes = ['fullscreen', 'standalone', 'minimal-ui', 'browser'];
+  const mode = modes.find((m) => matchMedia(`(display-mode: ${m})`).matches) ?? '?';
+  const fs = document.fullscreenElement ? 'on' : 'off';
+  return `display ${mode} · fullscreen api ${fs} · ${innerWidth}×${innerHeight} @${devicePixelRatio}x`;
 }

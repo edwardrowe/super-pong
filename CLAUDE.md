@@ -15,8 +15,9 @@ every push to `main` (it runs `npm test` and `npm run build` first).
 
 ## Layout
 - `src/engine/` — shared by every game: `input` (split-screen multi-touch, relative drag,
-  keyboard), `audio` (synth SFX + vibration), `music` (original 128 BPM dance loop whose layers
-  follow a 0–1 intensity the game sets; filter sweep on big moments, muffled while paused), `particles` (typed-array pool), `glow` (neon
+  keyboard), `audio` (synth SFX + vibration), `music` (original synth dance tracks defined as data in
+  `TRACKS` — tempo, chords, 16-step patterns; layers follow a 0–1 intensity the game sets; filter
+  sweep on big moments, muffled while paused; the player picks a track or Off), `particles` (typed-array pool), `glow` (neon
   sprites and stacked strokes), `grid` (spring-mesh background), `shake`, `types` (Game interface).
 - `src/shell/` — canvas setup, frame loop, menus, pause, rotate-your-phone screen.
 - `src/games/` — one folder per game; register new games in `src/games/index.ts`.
@@ -29,5 +30,6 @@ every push to `main` (it runs `npm test` and `npm run build` first).
 - Touches belong to the half of the screen they started on.
 - Super Pong leaves a gutter behind each paddle for fingers; the ball scores at the goal line
   (`goalL`/`goalR` on the field), not the screen edge. The grid only covers the play area.
+- Every grid warp has a matching `sfx.warp(amount)` bass dive; the serve wind-up plays `sfx.wobble`.
 - Must stay smooth on phones: avoid per-frame allocations in hot loops, keep DPR capped at 2.
 - In dev builds `window.__shell` exposes the shell for debugging (`__shell.frame(1/60)` steps a frame).

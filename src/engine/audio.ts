@@ -9,6 +9,7 @@ export class Sfx {
   /** Shared output (compressed) that the music also plays into. */
   bus: AudioNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
+  private drive: Float32Array<ArrayBuffer> | null = null;
   muted = localStorage.getItem('muted') === '1';
 
   unlock(): void {
@@ -74,6 +75,125 @@ export class Sfx {
       this.tone(f, f, 0.22, 'square', 0.07, 0, i * 0.09);
       this.tone(f, f * 0.99, 0.3, 'triangle', 0.18, 0, i * 0.09);
     });
+  }
+
+  /**
+   * Deep "space warp": a sub-bass dive with a resonant filter sweep and a wobble that settles.
+   * amount 0..1 scales depth, length and loudness. Distorted so the harmonics carry on phone
+   * speakers, which can't reproduce true sub-bass.
+   */
+  warp(amount: number, pan: number): void {
+    const ctx = this.ctx;
+    const dest = this.out(pan);
+    if (!ctx || !dest) return;
+    const a = Math.max(0, Math.min(1, amount));
+    const t = ctx.currentTime;
+    const dur = 0.3 + a * 1.1;
+    const f0 = 75 + a * 70;
+
+    const sub = ctx.createOscillator();
+    sub.frequency.setValueAtTime(f0, t);
+    sub.frequency.exponentialRampToValueAtTime(26, t + dur);
+    const saw = ctx.createOscillator();
+    saw.type = 'sawtooth';
+    saw.frequency.setValueAtTime(f0 * 0.5, t);
+    saw.frequency.exponentialRampToValueAtTime(20, t + dur);
+
+    // Wobble on pitch that slows down as it fades — the "warp".
+    const lfo = ctx.createOscillator();
+    lfo.frequency.setValueAtTime(11, t);
+    lfo.frequency.exponentialRampToValueAtTime(2.5, t + dur);
+    const depth = ctx.createGain();
+    depth.gain.setValueAtTime(f0 * 0.18, t);
+    depth.gain.exponentialRampToValueAtTime(0.5, t + dur);
+    lfo.connect(depth);
+    depth.connect(sub.frequency);
+    depth.connect(saw.frequency);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = 9;
+    filter.frequency.setValueAtTime(500 + a * 1500, t);
+    filter.frequency.exponentialRampToValueAtTime(60, t + dur);
+
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this.driveCurve();
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.08 + a * 0.67, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+    sub.connect(shaper);
+    saw.connect(filter).connect(shaper);
+    shaper.connect(g).connect(dest);
+    for (const o of [sub, saw, lfo]) {
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    }
+  }
+
+  /**
+   * A bass wobble that speeds up and rises while the ball materialises, ending right as it
+   * launches. dur should match the serve wind-up.
+   */
+  wobble(dur: number): void {
+    const ctx = this.ctx;
+    const dest = this.out(0);
+    if (!ctx || !dest) return;
+    const t = ctx.currentTime;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = 12;
+    filter.frequency.value = 420;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.setValueAtTime(3, t);
+    lfo.frequency.exponentialRampToValueAtTime(18, t + dur);
+    const depth = ctx.createGain();
+    depth.gain.setValueAtTime(380, t);
+    lfo.connect(depth).connect(filter.frequency);
+
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this.driveCurve();
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.42, t + 0.06);
+    g.gain.setValueAtTime(0.42, t + dur - 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.08);
+    filter.connect(shaper).connect(g).connect(dest);
+
+    const oscs: OscillatorNode[] = [lfo];
+    for (const [type, det] of [['sawtooth', -9], ['square', 9], ['sawtooth', 0]] as const) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.detune.value = det;
+      o.frequency.setValueAtTime(55, t);
+      o.frequency.setValueAtTime(55, t + dur * 0.55);
+      o.frequency.exponentialRampToValueAtTime(110, t + dur); // riser into the launch
+      o.connect(filter);
+      oscs.push(o);
+    }
+    const sub = ctx.createOscillator();
+    sub.frequency.setValueAtTime(55, t);
+    sub.frequency.setValueAtTime(55, t + dur * 0.55);
+    sub.frequency.exponentialRampToValueAtTime(110, t + dur);
+    const sg = ctx.createGain();
+    sg.gain.value = 0.55;
+    sub.connect(sg).connect(shaper);
+    oscs.push(sub);
+    for (const o of oscs) {
+      o.start(t);
+      o.stop(t + dur + 0.1);
+    }
+  }
+
+  private driveCurve(): Float32Array<ArrayBuffer> {
+    if (!this.drive) {
+      const n = 1024;
+      this.drive = new Float32Array(n);
+      for (let i = 0; i < n; i++) this.drive[i] = Math.tanh(((i / (n - 1)) * 2 - 1) * 2.6);
+    }
+    return this.drive;
   }
 
   firework(pan: number): void {

@@ -31,6 +31,7 @@ const PADDLE = { w: 22.5, h: 170, fromEdge: 140, keySpeed: 1400 };
 const GOAL_FROM_EDGE = 105;
 const BALL_R = 14;
 const TRAIL_LEN = 40;
+const SERVE_WINDUP = 0.85;
 
 type Phase = 'intro' | 'serve' | 'play' | 'scored' | 'won';
 
@@ -102,9 +103,12 @@ export class SuperPong implements Game {
   resize(view: View): void {
     const oldW = this.field.w;
     this.view = view;
-    this.field = { w: view.w, h: view.h, goalL: view.inset.l + GOAL_FROM_EDGE, goalR: view.w - view.inset.r - GOAL_FROM_EDGE };
-    this.paddles[0].x = view.inset.l + PADDLE.fromEdge;
-    this.paddles[1].x = view.w - view.inset.r - PADDLE.fromEdge;
+    // Use the larger safe-area inset (camera cutout) on both sides so the gutters match and
+    // the play area stays centred under the screen's halfway split.
+    const inset = Math.max(view.inset.l, view.inset.r);
+    this.field = { w: view.w, h: view.h, goalL: inset + GOAL_FROM_EDGE, goalR: view.w - inset - GOAL_FROM_EDGE };
+    this.paddles[0].x = inset + PADDLE.fromEdge;
+    this.paddles[1].x = view.w - inset - PADDLE.fromEdge;
     for (const p of this.paddles) p.y = clamp(p.y, p.h / 2, view.h - p.h / 2);
     if (oldW > 0 && this.phase === 'play') this.ball.x *= view.w / oldW;
     else this.ball.x = this.mid;
@@ -146,11 +150,13 @@ export class SuperPong implements Game {
         this.ballCi = WHITE;
         Object.assign(this.ball, { x: w2, y: h / 2, vx: 0, vy: 0 });
         this.trail.length = 0;
+        this.g.sfx.wobble(SERVE_WINDUP);
         break;
       case 'play':
         serve(this.ball, this.field, this.serveDir);
         this.acc = 0;
         this.g.sfx.serve();
+        this.g.sfx.warp(0.45, 0);
         this.rings.push({ x: w2, y: h / 2, t: 0, dur: 0.4, maxR: 140, color: COLOR.white, width: 4 });
         this.particles.burst(w2, h / 2, { count: 30, color: [WHITE, GOLD], speed: [200, 600], life: [0.2, 0.5], drag: 3 });
         this.grid.impulse(w2, h / 2, 500, 260);
@@ -190,7 +196,7 @@ export class SuperPong implements Game {
       case 'serve': {
         this.ballScale = easeOutBack(Math.min(1, this.phaseT / 0.7));
         if (this.phaseT < 0.55) this.implode(this.mid, this.field.h / 2, dt);
-        if (this.phaseT >= 0.85) this.enter('play');
+        if (this.phaseT >= SERVE_WINDUP) this.enter('play');
         break;
       }
       case 'play':
@@ -281,6 +287,7 @@ export class SuperPong implements Game {
         this.shake.add(0.2 + sf * 0.3);
         this.hitstop = 0.012 + sf * 0.05;
         sfx.paddle(sf, pan);
+        sfx.warp(0.12 + sf * 0.35, pan);
         buzz((12 + sf * 25) | 0);
         break;
       }
@@ -290,6 +297,7 @@ export class SuperPong implements Game {
         this.grid.impulse(e.x, e.y, 180, 170);
         this.shake.add(0.08);
         sfx.wall(pan);
+        sfx.warp(0.03, pan);
         break;
       }
       case 'goal': {
@@ -319,6 +327,7 @@ export class SuperPong implements Game {
         this.timeScale = 0.2;
         this.trail.length = 0;
         sfx.goal(pan);
+        sfx.warp(1, pan);
         this.g.music.sweep();
         buzz([45, 30, 80]);
         this.enter('scored');
@@ -361,6 +370,7 @@ export class SuperPong implements Game {
     this.grid.impulse(x, y, 900, 320);
     this.shake.add(0.22);
     this.g.sfx.firework((x / w) * 2 - 1);
+    this.g.sfx.warp(0.4, (x / w) * 2 - 1);
   }
 
   // ---- render --------------------------------------------------------------
