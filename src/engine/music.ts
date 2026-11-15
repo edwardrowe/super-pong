@@ -301,11 +301,17 @@ export class Music {
   /** 0..1 (slider position). 0 stops the music altogether. */
   volume: number;
 
+  /** Pick a random track at the start of every match (the default). */
+  shuffle: boolean;
+
   constructor() {
-    const saved = localStorage.getItem('track');
-    this.track = TRACKS.find((t) => t.id === saved) ?? TRACKS[0];
+    const old = localStorage.getItem('track');
+    const saved = localStorage.getItem('musicTrack') ?? 'shuffle';
+    const picked = TRACKS.find((t) => t.id === saved);
+    this.shuffle = !picked;
+    this.track = picked ?? TRACKS[Math.floor(Math.random() * TRACKS.length)];
     // Older versions had a music on/off switch instead of a volume.
-    const wasOff = saved === 'off' || localStorage.getItem('music') === '0';
+    const wasOff = old === 'off' || localStorage.getItem('music') === '0';
     this.volume = readVolume('musicVol', wasOff ? 0 : 0.75);
   }
 
@@ -313,10 +319,33 @@ export class Music {
     return (this.pending ?? this.track).id;
   }
 
+  /** 'shuffle' or the chosen track's id. */
+  get choice(): string {
+    return this.shuffle ? 'shuffle' : this.trackId;
+  }
+
+  /** Choose a track by id, or 'shuffle'. */
   select(id: string): void {
+    if (id === 'shuffle') {
+      this.shuffle = true;
+      localStorage.setItem('musicTrack', id);
+      return;
+    }
     const t = TRACKS.find((x) => x.id === id);
     if (!t) return;
-    localStorage.setItem('track', id);
+    this.shuffle = false;
+    localStorage.setItem('musicTrack', id);
+    this.switchTo(t);
+  }
+
+  /** A match is starting: on shuffle, change to a different random track. */
+  newMatch(): void {
+    if (!this.shuffle || TRACKS.length < 2) return;
+    const others = TRACKS.filter((t) => t.id !== this.trackId);
+    this.switchTo(others[Math.floor(Math.random() * others.length)]);
+  }
+
+  private switchTo(t: Track): void {
     if (this.ctx && this.volume > 0) this.pending = t; // switch on the next bar line
     else {
       this.track = t;

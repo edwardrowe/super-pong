@@ -6,6 +6,7 @@ import { Kind, Particles } from '../../engine/particles';
 import { Shake } from '../../engine/shake';
 import { WORLD_H, type Game, type GameContext, type Side, type View } from '../../engine/types';
 import { serve, speedFrac, speedOf, stepBall, type Ball, type BallEvent, type Field, type Paddle } from './physics';
+import { POWER, PowerSchedule, grownHeight, spawnPoint, touches } from './powerups';
 
 // ---- look & tuning ---------------------------------------------------------
 
@@ -40,6 +41,21 @@ interface PaddleState extends Paddle {
   squash: number;
   squashV: number;
   flash: number;
+}
+
+interface Popup {
+  x: number;
+  y: number;
+  t: number;
+  text: string;
+  color: string;
+}
+
+/** A power-up waiting on the court. t = seconds since it appeared. */
+interface PowerUp {
+  x: number;
+  y: number;
+  t: number;
 }
 
 interface Ring {
@@ -83,6 +99,15 @@ export class SuperPong implements Game {
   private flashColor = COLOR.white;
   private fireworkT = 0;
 
+  private schedule = new PowerSchedule();
+  private power: PowerUp | null = null;
+  /** Paddle growers each player has collected this match. */
+  private grows: [number, number] = [0, 0];
+  private growT: [number, number] = [99, 99];
+  /** Who touched the ball last (they get any power-up it hits). */
+  private lastHit: Side | -1 = -1;
+  private popups: Popup[] = [];
+
   private events: BallEvent[] = [];
   private rings: Ring[] = [];
   private wallHits: { x: number; y: number; t: number }[] = [];
@@ -96,6 +121,7 @@ export class SuperPong implements Game {
     const mk = (): PaddleState => ({ x: 0, y: WORLD_H / 2, w: PADDLE.w, h: PADDLE.h, vy: 0, squash: 0, squashV: 0, flash: 0 });
     this.paddles = [mk(), mk()];
     this.resize(g.view);
+    g.music.newMatch();
     this.enter('intro');
   }
 
@@ -127,6 +153,9 @@ export class SuperPong implements Game {
     if (this.phase === 'won' && this.phaseT > 1.0) {
       this.score = [0, 0];
       this.scoreT = [99, 99];
+      this.grows = [0, 0];
+      this.growT = [99, 99];
+      this.g.music.newMatch();
       this.serveDir = this.winner === 0 ? 1 : -1;
       this.enter('intro');
     } else if (this.phase === 'intro' && this.phaseT > 0.3) {
@@ -151,6 +180,8 @@ export class SuperPong implements Game {
         this.ballCi = WHITE;
         Object.assign(this.ball, { x: w2, y: h / 2, vx: 0, vy: 0 });
         this.trail.length = 0;
+        this.lastHit = -1;
+        this.schedule.startRally();
         this.g.sfx.charge(SERVE_WINDUP);
         break;
       case 'play':
@@ -164,6 +195,7 @@ export class SuperPong implements Game {
         break;
       case 'scored':
         this.ballVisible = false;
+        this.fizzlePower();
         break;
       case 'won':
         this.fireworkT = 0.15;
@@ -219,6 +251,11 @@ export class SuperPong implements Game {
     this.grid.update(sdt);
     for (const r of this.rings) r.t += sdt;
     this.rings = this.rings.filter((r) => r.t < r.dur);
+    if (this.power) this.power.t += sdt;
+    for (const p of this.popups) p.t += sdt;
+    this.popups = this.popups.filter((p) => p.t < 1.1);
+    this.growT[0] += dt;
+    this.growT[1] += dt;
     for (const w of this.wallHits) w.t += sdt;
     this.wallHits = this.wallHits.filter((w) => w.t < 0.35);
     this.scoreT[0] += dt;
@@ -229,6 +266,8 @@ export class SuperPong implements Game {
     const { input } = this.g;
     for (const side of [0, 1] as const) {
       const p = this.paddles[side];
+      // Grow (or shrink back, after a new match) smoothly toward the collected size.
+      p.h += (grownHeight(PADDLE.h, this.grows[side]) - p.h) * (1 - Math.exp(-dt * 7));
       const prevY = p.y;
       const move = input.consumeDrag(side) / this.view.scale + input.keyAxis(side) * PADDLE.keySpeed * dt;
       p.y = clamp(p.y + move, p.h / 2, this.field.h - p.h / 2);
@@ -250,6 +289,8 @@ export class SuperPong implements Game {
       this.trail.push({ x: this.ball.x, y: this.ball.y });
       if (this.trail.length > TRAIL_LEN) this.trail.shift();
       for (const e of this.events) this.handle(e);
+      const pw = this.power;
+      if (!goal && pw && pw.t > 0.15 && this.lastHit !== -1 && touches(this.ball, pw.x, pw.y)) this.collect(this.lastHit, pw);
       if (goal) {
         this.acc = 0;
         break;
@@ -266,6 +307,8 @@ export class SuperPong implements Game {
         const p = this.paddles[e.side];
         const col = COLOR.player[e.side];
         const sf = speedFrac(e.speed);
+        this.lastHit = e.side;
+        if (this.schedule.onHit()) this.spawnPower();
         this.ballColor = col;
         this.ballCi = pc(e.side);
         p.squashV = 10 + sf * 8;
@@ -327,6 +370,64 @@ export class SuperPong implements Game {
     }
   }
 
+  // ---- power-ups -------------------------------------------------------------
+
+  private spawnPower(): void {
+    // One at a time, and none once both paddles are full size.
+    if (this.power || Math.min(...this.grows) >= POWER.maxGrows) return;
+    const { x, y } = spawnPoint(this.field, this.ball);
+    this.power = { x, y, t: 0 };
+    const pan = (x / this.field.w) * 2 - 1;
+    this.rings.push({ x, y, t: 0, dur: 0.45, maxR: 120, color: COLOR.gold, width: 3 });
+    this.particles.burst(x, y, { count: 24, color: [GOLD, WHITE], speed: [120, 420], life: [0.2, 0.5], drag: 4 });
+    this.grid.impulse(x, y, 260, 200);
+    this.g.sfx.powerSpawn(pan);
+    this.g.sfx.warp(0.08, pan);
+  }
+
+  private collect(side: Side, pw: PowerUp): void {
+    this.power = null;
+    const maxed = this.grows[side] >= POWER.maxGrows;
+    if (!maxed) {
+      this.grows[side]++;
+      this.growT[side] = 0;
+    }
+    const col = COLOR.player[side];
+    const ci = pc(side);
+    const p = this.paddles[side];
+    const pan = (pw.x / this.field.w) * 2 - 1;
+    this.particles.burst(pw.x, pw.y, { count: 90, color: [GOLD, GOLD, ci, WHITE], speed: [150, 900], life: [0.3, 0.8], drag: 2.5 });
+    // A stream of sparks flies from the pickup to the paddle that earned it.
+    for (let i = 0; i < 28; i++) {
+      const life = 0.3 + Math.random() * 0.25;
+      const tx = p.x + (Math.random() - 0.5) * 20;
+      const ty = p.y + (Math.random() - 0.5) * p.h;
+      const sx = pw.x + (Math.random() - 0.5) * 40;
+      const sy = pw.y + (Math.random() - 0.5) * 40;
+      this.particles.spawn(sx, sy, (tx - sx) / life, (ty - sy) / life, life, 3, Math.random() < 0.5 ? ci : GOLD, Kind.Streak, 0);
+    }
+    this.rings.push(
+      { x: pw.x, y: pw.y, t: 0, dur: 0.4, maxR: 220, color: COLOR.gold, width: 5 },
+      { x: p.x, y: p.y, t: -0.3, dur: 0.4, maxR: p.h * 0.9, color: col, width: 4 },
+    );
+    this.popups.push({ x: pw.x, y: pw.y - 60, t: 0, text: maxed ? 'MAX SIZE' : 'PADDLE UP', color: col });
+    p.flash = 1;
+    p.squashV = 14;
+    this.grid.impulse(pw.x, pw.y, 700, 300);
+    this.shake.add(0.3);
+    this.g.sfx.powerUp(pan, maxed);
+    this.g.sfx.warp(0.25, pan);
+    buzz(30);
+  }
+
+  /** The point ended with a power-up still on court: it pops quietly. */
+  private fizzlePower(): void {
+    const pw = this.power;
+    if (!pw) return;
+    this.power = null;
+    this.particles.burst(pw.x, pw.y, { count: 18, color: [GOLD, WHITE], speed: [60, 260], life: [0.2, 0.45], drag: 4 });
+  }
+
   /** Particles rushing into the centre as the ball materialises. */
   private implode(x: number, y: number, dt: number): void {
     const n = Math.ceil(dt * 260);
@@ -385,8 +486,10 @@ export class SuperPong implements Game {
       const f = r.t / r.dur;
       glowRing(ctx, r.x, r.y, r.maxR * easeOutCubic(f), r.color, r.width * (1 - f * 0.7), 1 - f);
     }
+    this.drawPower(ctx);
     this.drawPaddles(ctx);
     if (this.ballVisible) this.drawBall(ctx);
+    this.drawPopups(ctx);
     this.drawText(ctx);
     ctx.restore();
 
@@ -442,6 +545,95 @@ export class SuperPong implements Game {
       ctx.font = `700 280px ${FONT}`;
       ctx.fillStyle = rgba(COLOR.player[s], 0.09 + 0.55 * bright);
       ctx.fillText(String(this.score[s]), 0, 12);
+      ctx.restore();
+      this.drawGrowPips(ctx, this.mid + (s === 0 ? -q : q), h / 2 + 180, s);
+    }
+  }
+
+  /** Five diamonds under each score: one lights up per paddle grower collected. */
+  private drawGrowPips(ctx: CanvasRenderingContext2D, cx: number, y: number, s: Side): void {
+    const col = COLOR.player[s];
+    const n = this.grows[s];
+    const gap = 54;
+    for (let i = 0; i < POWER.maxGrows; i++) {
+      const x = cx + (i - (POWER.maxGrows - 1) / 2) * gap;
+      const on = i < n;
+      const newest = on && i === n - 1;
+      const t = this.growT[s];
+      const pop = newest ? 1 + 1.2 * Math.exp(-5 * t) * Math.abs(Math.cos(9 * t)) : 1;
+      const r = 13 * pop;
+      ctx.beginPath();
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r, y);
+      ctx.lineTo(x, y + r);
+      ctx.lineTo(x - r, y);
+      ctx.closePath();
+      if (on) {
+        drawGlow(ctx, col, x, y, r * 6, newest ? 0.3 + 0.6 * Math.exp(-3 * t) : 0.3);
+        ctx.fillStyle = whiten(col, 0.35);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = rgba(col, 0.28);
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+  }
+
+  private drawPower(ctx: CanvasRenderingContext2D): void {
+    const pw = this.power;
+    if (!pw) return;
+    const s = easeOutBack(Math.min(1, pw.t / 0.35));
+    const r = POWER.radius * s;
+    if (r <= 0.5) return;
+    const x = pw.x;
+    const y = pw.y + Math.sin(this.time * 3) * 6;
+    const pulse = 1 + 0.12 * Math.sin(this.time * 7);
+    drawGlow(ctx, COLOR.gold, x, y, r * 6 * pulse, 0.32);
+    drawGlow(ctx, COLOR.gold, x, y, r * 2.4, 0.5);
+    // Two counter-rotating diamonds.
+    for (const [spin, k, a] of [[1.3, 1, 0.95], [-0.8, 1.3, 0.35]]) {
+      const rr = r * k;
+      const ang = this.time * spin;
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const t = ang + (i * Math.PI) / 2;
+        const px = x + Math.cos(t) * rr;
+        const py = y + Math.sin(t) * rr;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      glowStroke(ctx, COLOR.gold, 3.2, a);
+    }
+    // Icon: a vertical double arrow — "taller paddle".
+    const a = r * 0.55;
+    const head = a * 0.42;
+    ctx.beginPath();
+    ctx.moveTo(x, y - a);
+    ctx.lineTo(x, y + a);
+    ctx.moveTo(x - head, y - a + head);
+    ctx.lineTo(x, y - a);
+    ctx.lineTo(x + head, y - a + head);
+    ctx.moveTo(x - head, y + a - head);
+    ctx.lineTo(x, y + a);
+    ctx.lineTo(x + head, y + a - head);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    glowStroke(ctx, '#ffffff', 3, 0.9);
+  }
+
+  private drawPopups(ctx: CanvasRenderingContext2D): void {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `700 44px ${FONT}`;
+    for (const p of this.popups) {
+      const a = Math.min(1, p.t / 0.08) * clamp((1.1 - p.t) / 0.35, 0, 1);
+      const s = 1 + 0.4 * Math.exp(-8 * p.t);
+      ctx.save();
+      ctx.translate(p.x, p.y - easeOutCubic(Math.min(1, p.t / 1.1)) * 70);
+      ctx.scale(s, s);
+      neonText(ctx, p.text, 0, 0, whiten(p.color, 0.4), p.color, a);
       ctx.restore();
     }
   }

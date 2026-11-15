@@ -251,6 +251,21 @@ export class Sfx {
     this.tone(1100, 280, 0.16, 'triangle', 0.08, pan);
   }
 
+  /** A power-up appears: a quick shimmering sparkle. */
+  powerSpawn(pan: number): void {
+    [1320, 1760, 2217, 2637].forEach((f, i) => this.tone(f, f * 1.005, 0.18, 'sine', 0.07, pan, i * 0.045));
+  }
+
+  /** A power-up is collected: a bright rising arpeggio (cut short if the paddle is already maxed). */
+  powerUp(pan: number, maxed: boolean): void {
+    const notes = maxed ? [392, 523] : [392, 523, 659, 784, 1047];
+    notes.forEach((f, i) => {
+      this.tone(f, f, 0.12, 'square', 0.09, pan, i * 0.055);
+      this.tone(f * 2, f * 2, 0.1, 'triangle', 0.08, pan, i * 0.055);
+    });
+    this.tone(110, 55, 0.35, 'sine', 0.5, pan);
+  }
+
   click(): void {
     this.tone(660, 990, 0.06, 'square', 0.08, 0);
   }

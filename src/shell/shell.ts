@@ -208,7 +208,7 @@ export class Shell {
   }
 
   private buildAudioPanel(): void {
-    for (const t of TRACKS) {
+    for (const t of [{ id: 'shuffle', name: 'Shuffle' }, ...TRACKS]) {
       const b = document.createElement('button');
       b.className = 'chip';
       b.setAttribute('role', 'radio');
@@ -242,7 +242,7 @@ export class Shell {
 
   private syncAudioPanel(): void {
     for (const b of this.ui.tracks.children) {
-      (b as HTMLElement).setAttribute('aria-checked', String((b as HTMLElement).dataset.id === this.music.trackId));
+      (b as HTMLElement).setAttribute('aria-checked', String((b as HTMLElement).dataset.id === this.music.choice));
     }
     const set = (input: HTMLInputElement, v: number) => {
       const pct = Math.round(v * 100);

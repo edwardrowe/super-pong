@@ -23,6 +23,8 @@ every push to `main` (it runs `npm test` and `npm run build` first).
   volume, saved in localStorage), rotate-your-phone screen.
 - `src/games/` — one folder per game; register new games in `src/games/index.ts`.
 - `src/games/super-pong/physics.ts` — pure, tested ball physics. Keep game rules here, not in rendering.
+- `src/games/super-pong/powerups.ts` — pure, tested power-up rules (when they spawn, where, pickup,
+  paddle growth). Power-ups go to whoever touched the ball last; growth lasts the whole match.
 
 ## Conventions
 - Games draw in world units: the field is always 900 tall; width varies with aspect ratio.
@@ -34,6 +36,7 @@ every push to `main` (it runs `npm test` and `npm run build` first).
 - Every grid warp has a matching `sfx.warp(amount)` bass dive; the serve wind-up plays `sfx.charge`,
   then `sfx.serve` booms on launch. The music never changes tempo: it builds by
   adding instruments — level 0 on the menu, 1 at kick-off, +1 per point the leader has (7 at match
-  point), 8 on the win screen. Changes land on the next bar line with a crash.
+  point), 8 on the win screen. Changes land on the next bar line with a crash. On Shuffle (the default) every match
+  starts a different random track (`music.newMatch()`).
 - Must stay smooth on phones: avoid per-frame allocations in hot loops, keep DPR capped at 2.
 - In dev builds `window.__shell` exposes the shell for debugging (`__shell.frame(1/60)` steps a frame).
