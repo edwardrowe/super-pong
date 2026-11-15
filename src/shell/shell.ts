@@ -242,7 +242,7 @@ export class Shell {
 
   /** Debug changes wait here until Save. */
   private pendingSettings = new Map<string, boolean>();
-  /** Queued awards, keyed `${powerUpId}:${side}`. */
+  /** Power-up counts to set on Save, keyed `${powerUpId}:${side}`. Only changed ones are listed. */
   private pendingAwards = new Map<string, number>();
 
   /** One switch per entry in SETTINGS. Changes are held until Save. */
@@ -271,36 +271,49 @@ export class Shell {
     this.openPanel(this.ui.debug);
   }
 
-  /** A row per power-up kind with a −/+ counter for each player. Only during a game. */
+  /**
+   * A row per power-up kind with a −/+ counter for each player, starting at what they hold now and
+   * limited to what they can hold. Only during a game.
+   */
   private buildAwards(): void {
     const box = this.ui.debugAwards;
     box.replaceChildren();
-    const kinds = this.game?.award ? (this.game.powerUps ?? []) : [];
-    if (!kinds.length) {
+    const game = this.game;
+    const kinds = game?.setPowerUps && game.powerUpCount ? (game.powerUps ?? []) : [];
+    if (!game || !kinds.length) {
       box.innerHTML = '<p class="hint">Start a game to award power-ups.</p>';
       return;
     }
     const head = document.createElement('div');
     head.className = 'award head';
-    head.innerHTML = '<span>Award power-ups</span><span class="p0">Cyan</span><span class="p1">Magenta</span>';
+    head.innerHTML = '<span>Power-ups</span><span class="p0">Cyan</span><span class="p1">Magenta</span>';
     box.appendChild(head);
     for (const kind of kinds) {
       const row = document.createElement('div');
       row.className = 'award';
       const name = document.createElement('span');
-      name.textContent = kind.name;
+      name.textContent = `${kind.name} (max ${kind.max})`;
       row.appendChild(name);
       for (const side of [0, 1] as const) {
         const key = `${kind.id}:${side}`;
+        const now = game.powerUpCount!(side, kind.id);
         const step = document.createElement('div');
         step.className = `stepper p${side}`;
-        step.innerHTML = '<button aria-label="One fewer">−</button><output>0</output><button aria-label="One more">+</button>';
+        step.innerHTML = '<button aria-label="One fewer">−</button><output></output><button aria-label="One more">+</button>';
         const [minus, plus] = step.querySelectorAll('button');
         const out = step.querySelector('output')!;
-        const change = (d: number) => {
-          const n = Math.max(0, Math.min(9, (this.pendingAwards.get(key) ?? 0) + d));
-          this.pendingAwards.set(key, n);
+        const show = (n: number) => {
           out.textContent = String(n);
+          out.classList.toggle('changed', n !== now);
+          minus.disabled = n <= 0;
+          plus.disabled = n >= kind.max;
+        };
+        show(now);
+        const change = (d: number) => {
+          const n = Math.max(0, Math.min(kind.max, (this.pendingAwards.get(key) ?? now) + d));
+          if (n === now) this.pendingAwards.delete(key);
+          else this.pendingAwards.set(key, n);
+          show(n);
           this.sfx.click();
         };
         minus.addEventListener('click', () => change(-1));
@@ -316,7 +329,7 @@ export class Shell {
     for (const [id, v] of this.pendingSettings) this.settings.set(id, v);
     for (const [key, n] of this.pendingAwards) {
       const [id, side] = key.split(':');
-      if (n > 0) this.game?.award?.(Number(side) as 0 | 1, id, n);
+      this.game?.setPowerUps?.(Number(side) as 0 | 1, id, n);
     }
     this.pendingSettings.clear();
     this.pendingAwards.clear();

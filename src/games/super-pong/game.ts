@@ -7,7 +7,7 @@ import { Shake } from '../../engine/shake';
 import { WORLD_H, type Game, type GameContext, type Side, type View } from '../../engine/types';
 import { PHYS, brake, serve, speedFrac, speedOf, stepBall, type Ball, type BallEvent, type Field, type Paddle, type PhysOptions } from './physics';
 import { POWER, PowerSchedule, grownHeight, spawnPoint, touches } from './powerups';
-import { ITEMS, Inventory, SLOW, type ItemId } from './items';
+import { ITEMS, ITEM_SLOTS, Inventory, SLOW, type ItemId } from './items';
 
 // ---- look & tuning ---------------------------------------------------------
 
@@ -451,22 +451,35 @@ export class SuperPong implements Game {
     this.g.sfx.warp(0.08, pan);
   }
 
-  /** Power-up kinds the Debug screen can award. */
+  /** Power-up kinds the Debug screen can set, with the most a player can hold. */
   readonly powerUps = [
-    { id: 'grow', name: 'Paddle grower' },
-    { id: 'slow', name: 'Slowdown' },
+    { id: 'grow', name: 'Paddle grower', max: POWER.maxGrows },
+    { id: 'slow', name: 'Slowdown', max: ITEM_SLOTS },
   ];
 
-  /** Debug: give a player power-ups, with the usual pickup show (sparks come from mid-court). */
-  award(side: Side, id: string, count: number): void {
-    if (id in ITEMS) {
-      for (let i = 0; i < count; i++) if (this.items.give(side, id as ItemId)) this.slotFlash[side] = 1;
+  powerUpCount(side: Side, id: string): number {
+    if (id === 'grow') return this.grows[side];
+    return this.items.slots[side].filter((it) => it === id).length;
+  }
+
+  /**
+   * Debug: set how many of a power-up a player has. Extra ones arrive with the usual pickup show
+   * (sparks come from mid-court); removed ones just go (the paddle shrinks back smoothly).
+   */
+  setPowerUps(side: Side, id: string, count: number): void {
+    const kind = this.powerUps.find((k) => k.id === id);
+    if (!kind) return;
+    const target = Math.max(0, Math.min(kind.max, Math.round(count)));
+    if (id === 'grow') {
+      const p = this.paddles[side];
+      const x = p.x + (side === 0 ? 1 : -1) * 260;
+      while (this.grows[side] < target) this.grow(side, x, p.y, this.grows[side] === target - 1);
+      if (this.grows[side] > target) this.grows[side] = target;
       return;
     }
-    if (id !== 'grow') return;
-    const p = this.paddles[side];
-    const x = p.x + (side === 0 ? 1 : -1) * 260;
-    for (let i = 0; i < count && this.grows[side] < POWER.maxGrows; i++) this.grow(side, x, p.y, i === count - 1);
+    const item = id as ItemId;
+    while (this.powerUpCount(side, id) < target && this.items.give(side, item)) this.slotFlash[side] = 1;
+    while (this.powerUpCount(side, id) > target) this.items.take(side, this.items.slots[side].indexOf(item));
   }
 
   private collect(side: Side, pw: PowerUp): void {
