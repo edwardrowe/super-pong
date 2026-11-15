@@ -251,6 +251,12 @@ export class Sfx {
     this.tone(1100, 280, 0.16, 'triangle', 0.08, pan);
   }
 
+  /** A hit with spin on it: a rising whoosh. amount 0..1. */
+  spin(amount: number, pan: number): void {
+    this.noise(0.2, 0.12 + amount * 0.2, 900, 7000, pan);
+    this.tone(320, 1400 + amount * 900, 0.16, 'triangle', 0.05 + amount * 0.07, pan);
+  }
+
   /** A power-up appears: a quick shimmering sparkle. */
   powerSpawn(pan: number): void {
     [1320, 1760, 2217, 2637].forEach((f, i) => this.tone(f, f * 1.005, 0.18, 'sine', 0.07, pan, i * 0.045));

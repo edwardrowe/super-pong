@@ -13,34 +13,30 @@ const hitsUntilSpawn = (s: PowerSchedule, max = 100) => {
 };
 
 describe('PowerSchedule', () => {
-  it('first spawn comes 3–5 hits into a rally, then every 7–15', () => {
-    for (let trial = 0; trial < 200; trial++) {
-      let fresh = true; // make sure this rally has power-ups; everything after is random
-      const s = new PowerSchedule(() => (fresh ? ((fresh = false), 0) : Math.random()));
+  it('every rally gets one 2–6 hits in, then every 7–12', () => {
+    const seen = new Set<number>();
+    for (let trial = 0; trial < 300; trial++) {
+      const s = new PowerSchedule();
       s.startRally();
       const first = hitsUntilSpawn(s);
-      expect(first).toBeGreaterThanOrEqual(3);
-      expect(first).toBeLessThanOrEqual(5);
+      seen.add(first);
+      expect(first).toBeGreaterThanOrEqual(2);
+      expect(first).toBeLessThanOrEqual(6);
       for (let k = 0; k < 3; k++) {
         const next = hitsUntilSpawn(s);
         expect(next).toBeGreaterThanOrEqual(7);
-        expect(next).toBeLessThanOrEqual(15);
+        expect(next).toBeLessThanOrEqual(12);
       }
     }
-  });
-
-  it('some rallies have no power-ups', () => {
-    const s = new PowerSchedule(seq(0.99));
-    s.startRally();
-    expect(hitsUntilSpawn(s)).toBe(-1);
+    expect([...seen].sort()).toEqual([2, 3, 4, 5, 6]);
   });
 
   it('a new rally restarts the count', () => {
-    const s = new PowerSchedule(seq(0, 0, 0, 0)); // always in, always the shortest gap
+    const s = new PowerSchedule(seq(0)); // always the shortest gap
     s.startRally();
     s.onHit();
     s.startRally();
-    expect(hitsUntilSpawn(s)).toBe(3);
+    expect(hitsUntilSpawn(s)).toBe(2);
   });
 });
 

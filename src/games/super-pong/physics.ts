@@ -6,6 +6,8 @@ export interface Ball {
   vx: number;
   vy: number;
   r: number;
+  /** Curve rate in radians per second (+ turns clockwise on screen). Only used with spin on. */
+  spin?: number;
 }
 
 export interface Paddle {
@@ -38,10 +40,22 @@ export const PHYS = {
   english: 0.15,
   /** Never let the ball travel steeper than this from horizontal. */
   maxTravelAngle: (62 * Math.PI) / 180,
+  /** Spin (rad/s of curve) per unit/s of paddle speed at the moment of the hit. */
+  spinPerPaddleSpeed: 0.0007,
+  maxSpin: 2.0,
+  /** Spin fades by this factor per second (exponential). */
+  spinDecay: 0.7,
+  /** A wall bounce keeps this much spin, reversed, so the ball kicks away from the wall. */
+  wallSpin: -0.5,
 };
 
+export interface PhysOptions {
+  /** Paddle movement at the moment of a hit puts curve on the ball. */
+  spin?: boolean;
+}
+
 export type BallEvent =
-  | { type: 'paddle'; side: 0 | 1; x: number; y: number; speed: number; offset: number }
+  | { type: 'paddle'; side: 0 | 1; x: number; y: number; speed: number; offset: number; spin: number }
   | { type: 'wall'; x: number; y: number; top: boolean }
   | { type: 'goal'; scorer: 0 | 1; x: number; y: number };
 
@@ -57,6 +71,7 @@ export function serve(ball: Ball, field: Field, dir: 1 | -1, rnd: () => number =
   const a = (rnd() * 2 - 1) * PHYS.serveAngle;
   ball.vx = Math.cos(a) * PHYS.serveSpeed * dir;
   ball.vy = Math.sin(a) * PHYS.serveSpeed;
+  ball.spin = 0;
 }
 
 /**
@@ -64,22 +79,33 @@ export function serve(ball: Ball, field: Field, dir: 1 | -1, rnd: () => number =
  * paddle face during the step), so a fast ball can't tunnel through. Events are pushed
  * to `out`. Returns true if a goal was scored.
  */
-export function stepBall(ball: Ball, paddles: readonly [Paddle, Paddle], field: Field, dt: number, out: BallEvent[]): boolean {
+export function stepBall(
+  ball: Ball,
+  paddles: readonly [Paddle, Paddle],
+  field: Field,
+  dt: number,
+  out: BallEvent[],
+  opts: PhysOptions = {},
+): boolean {
+  if (opts.spin && ball.spin) curve(ball, dt);
+  else ball.spin = 0;
   const px = ball.x;
   const py = ball.y;
   ball.x += ball.vx * dt;
   ball.y += ball.vy * dt;
 
-  if (ball.vx < 0) hitPaddle(ball, paddles[0], 0, px, py, out);
-  else if (ball.vx > 0) hitPaddle(ball, paddles[1], 1, px, py, out);
+  if (ball.vx < 0) hitPaddle(ball, paddles[0], 0, px, py, out, opts);
+  else if (ball.vx > 0) hitPaddle(ball, paddles[1], 1, px, py, out, opts);
 
   if (ball.y - ball.r < 0) {
     ball.y = 2 * ball.r - ball.y;
     ball.vy = Math.abs(ball.vy);
+    if (ball.spin) ball.spin *= PHYS.wallSpin;
     out.push({ type: 'wall', x: ball.x, y: 0, top: true });
   } else if (ball.y + ball.r > field.h) {
     ball.y = 2 * (field.h - ball.r) - ball.y;
     ball.vy = -Math.abs(ball.vy);
+    if (ball.spin) ball.spin *= PHYS.wallSpin;
     out.push({ type: 'wall', x: ball.x, y: field.h, top: false });
   }
 
@@ -95,7 +121,25 @@ export function stepBall(ball: Ball, paddles: readonly [Paddle, Paddle], field: 
   return false;
 }
 
-function hitPaddle(ball: Ball, p: Paddle, side: 0 | 1, px: number, py: number, out: BallEvent[]): boolean {
+/** Turn the ball's direction by its spin (speed unchanged), never steeper than maxTravelAngle. */
+function curve(ball: Ball, dt: number): void {
+  const spin = ball.spin ?? 0;
+  const a = spin * dt;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const vx = ball.vx * c - ball.vy * s;
+  const vy = ball.vx * s + ball.vy * c;
+  const speed = Math.hypot(vx, vy);
+  if (Math.abs(vx) < speed * Math.cos(PHYS.maxTravelAngle) || Math.sign(vx) !== Math.sign(ball.vx)) {
+    ball.spin = 0; // as steep as it may go: the curve is used up
+    return;
+  }
+  ball.vx = vx;
+  ball.vy = vy;
+  ball.spin = spin * Math.exp(-PHYS.spinDecay * dt);
+}
+
+function hitPaddle(ball: Ball, p: Paddle, side: 0 | 1, px: number, py: number, out: BallEvent[], opts: PhysOptions): boolean {
   // dir: which way the ball travels after bouncing off this paddle.
   const dir = side === 0 ? 1 : -1;
   const face = p.x + (dir * p.w) / 2;
@@ -126,6 +170,10 @@ function hitPaddle(ball: Ball, p: Paddle, side: 0 | 1, px: number, py: number, o
   ball.vy = ny * speed;
   ball.x = face + dir * ball.r;
   ball.y = yAt;
-  out.push({ type: 'paddle', side, x: face, y: yAt, speed, offset });
+  // Spin: the ball curves the way the paddle was moving (a positive turn heads down for a
+  // ball going right, up for one going left — hence the dir).
+  const spin = opts.spin ? Math.max(-PHYS.maxSpin, Math.min(PHYS.maxSpin, p.vy * PHYS.spinPerPaddleSpeed)) * dir : 0;
+  ball.spin = spin;
+  out.push({ type: 'paddle', side, x: face, y: yAt, speed, offset, spin });
   return true;
 }

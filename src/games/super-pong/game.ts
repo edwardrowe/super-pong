@@ -5,7 +5,7 @@ import { MAX_LEVEL } from '../../engine/music';
 import { Kind, Particles } from '../../engine/particles';
 import { Shake } from '../../engine/shake';
 import { WORLD_H, type Game, type GameContext, type Side, type View } from '../../engine/types';
-import { serve, speedFrac, speedOf, stepBall, type Ball, type BallEvent, type Field, type Paddle } from './physics';
+import { PHYS, serve, speedFrac, speedOf, stepBall, type Ball, type BallEvent, type Field, type Paddle, type PhysOptions } from './physics';
 import { POWER, PowerSchedule, grownHeight, spawnPoint, touches } from './powerups';
 
 // ---- look & tuning ---------------------------------------------------------
@@ -82,6 +82,9 @@ export class SuperPong implements Game {
   private ballVisible = false;
   private ballScale = 0;
   private trail: { x: number; y: number }[] = [];
+  /** Visual rotation of the spin marks around the ball. */
+  private ballAngle = 0;
+  private phys: PhysOptions = { spin: false };
 
   private score: [number, number] = [0, 0];
   private scoreT: [number, number] = [99, 99];
@@ -219,8 +222,10 @@ export class SuperPong implements Game {
     this.timeScale += (1 - this.timeScale) * (1 - Math.exp(-dt * 2.2));
     const sdt = dt * this.timeScale;
 
+    this.phys.spin = this.g.settings.get('spin');
     this.updatePaddles(dt);
     this.phaseT += sdt;
+    this.ballAngle += (this.ball.spin ?? 0) * 7 * sdt;
 
     switch (this.phase) {
       case 'intro':
@@ -285,7 +290,7 @@ export class SuperPong implements Game {
     while (this.acc >= STEP) {
       this.acc -= STEP;
       this.events.length = 0;
-      const goal = stepBall(this.ball, this.paddles, this.field, STEP, this.events);
+      const goal = stepBall(this.ball, this.paddles, this.field, STEP, this.events, this.phys);
       this.trail.push({ x: this.ball.x, y: this.ball.y });
       if (this.trail.length > TRAIL_LEN) this.trail.shift();
       for (const e of this.events) this.handle(e);
@@ -322,6 +327,13 @@ export class SuperPong implements Game {
         this.hitstop = 0.012 + sf * 0.05;
         sfx.paddle(sf, pan);
         sfx.warp(0.12 + sf * 0.35, pan);
+        const spin = Math.abs(e.spin) / PHYS.maxSpin;
+        if (spin > 0.2) {
+          // A curling spray of sparks that shows which way it will bend.
+          const bend = Math.sign(e.spin) * (e.side === 0 ? 1 : -1);
+          this.particles.burst(e.x, e.y, { count: (10 + spin * 30) | 0, color: [GOLD, WHITE, pc(e.side)], speed: [300, 900], angle: out + bend * 0.7, spread: 0.7, life: [0.2, 0.45], drag: 3 });
+          sfx.spin(spin, pan);
+        }
         buzz((12 + sf * 25) | 0);
         break;
       }
@@ -546,37 +558,6 @@ export class SuperPong implements Game {
       ctx.fillStyle = rgba(COLOR.player[s], 0.09 + 0.55 * bright);
       ctx.fillText(String(this.score[s]), 0, 12);
       ctx.restore();
-      this.drawGrowPips(ctx, this.mid + (s === 0 ? -q : q), h / 2 + 180, s);
-    }
-  }
-
-  /** Five diamonds under each score: one lights up per paddle grower collected. */
-  private drawGrowPips(ctx: CanvasRenderingContext2D, cx: number, y: number, s: Side): void {
-    const col = COLOR.player[s];
-    const n = this.grows[s];
-    const gap = 54;
-    for (let i = 0; i < POWER.maxGrows; i++) {
-      const x = cx + (i - (POWER.maxGrows - 1) / 2) * gap;
-      const on = i < n;
-      const newest = on && i === n - 1;
-      const t = this.growT[s];
-      const pop = newest ? 1 + 1.2 * Math.exp(-5 * t) * Math.abs(Math.cos(9 * t)) : 1;
-      const r = 13 * pop;
-      ctx.beginPath();
-      ctx.moveTo(x, y - r);
-      ctx.lineTo(x + r, y);
-      ctx.lineTo(x, y + r);
-      ctx.lineTo(x - r, y);
-      ctx.closePath();
-      if (on) {
-        drawGlow(ctx, col, x, y, r * 6, newest ? 0.3 + 0.6 * Math.exp(-3 * t) : 0.3);
-        ctx.fillStyle = whiten(col, 0.35);
-        ctx.fill();
-      } else {
-        ctx.strokeStyle = rgba(col, 0.28);
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
     }
   }
 
@@ -659,6 +640,10 @@ export class SuperPong implements Game {
     }
   }
 
+  /**
+   * The paddle's own length in its colour, plus one gold segment at each end per paddle grower
+   * collected — so the size shows on the paddle itself. Full size pulses gold.
+   */
   private drawPaddles(ctx: CanvasRenderingContext2D): void {
     for (const side of [0, 1] as const) {
       const p = this.paddles[side];
@@ -666,8 +651,28 @@ export class SuperPong implements Game {
       const sx = Math.max(0.5, 1 + 0.9 * p.squash);
       const sy = Math.max(0.6, 1 - 0.14 * p.squash);
       const touch = this.g.input.isTouching(side) ? 0.15 : 0;
-      drawGlow(ctx, col, p.x, p.y, p.h * 1.5, 0.1 + p.flash * 0.35 + touch * 0.3);
-      glowRect(ctx, p.x, p.y, p.w * 0.72 * sx, p.h * sy, p.flash > 0 ? whiten(col, p.flash * 0.7) : col, 0.85 + p.flash * 0.5 + touch);
+      const w = p.w * 0.72 * sx;
+      const n = this.grows[side];
+      const maxed = n >= POWER.maxGrows;
+      const glowA = 0.1 + p.flash * 0.35 + touch * 0.3;
+      drawGlow(ctx, maxed ? COLOR.gold : col, p.x, p.y, p.h * 1.5, maxed ? glowA + 0.08 + 0.06 * Math.sin(this.time * 5) : glowA);
+      const coreCol = p.flash > 0 ? whiten(col, p.flash * 0.7) : col;
+      const ext = p.h - PADDLE.h; // grows (and shrinks back) smoothly
+      const segs = Math.max(n, ext > 1 ? 1 : 0);
+      if (segs === 0) {
+        glowRect(ctx, p.x, p.y, w, p.h * sy, coreCol, 0.85 + p.flash * 0.5 + touch);
+        continue;
+      }
+      glowRect(ctx, p.x, p.y, w, PADDLE.h * sy, coreCol, 0.85 + p.flash * 0.5 + touch);
+      const seg = ext / 2 / segs;
+      const gap = Math.min(5, seg * 0.3);
+      for (let i = 0; i < segs; i++) {
+        const newest = i === n - 1 ? Math.exp(-4 * this.growT[side]) : 0;
+        const segCol = whiten(COLOR.gold, 0.15 + newest * 0.6);
+        const off = (PADDLE.h / 2 + seg * (i + 0.5)) * sy;
+        const len = Math.max(0, (seg - gap) * sy);
+        for (const dir of [-1, 1]) glowRect(ctx, p.x, p.y + dir * off, w, len, segCol, 0.8 + newest + touch);
+      }
     }
   }
 
@@ -682,6 +687,16 @@ export class SuperPong implements Game {
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
+    // Spin: two gold arcs whirling around the ball, brighter the harder it curves.
+    const spin = Math.min(1, Math.abs(this.ball.spin ?? 0) / PHYS.maxSpin);
+    if (spin > 0.03 && this.phase === 'play') {
+      ctx.beginPath();
+      for (const k of [0, Math.PI]) {
+        ctx.moveTo(x + Math.cos(this.ballAngle + k) * r * 1.9, y + Math.sin(this.ballAngle + k) * r * 1.9);
+        ctx.arc(x, y, r * 1.9, this.ballAngle + k, this.ballAngle + k + 1.6);
+      }
+      glowStroke(ctx, COLOR.gold, 2.5, 0.25 + spin * 0.75);
+    }
   }
 
   private drawText(ctx: CanvasRenderingContext2D): void {

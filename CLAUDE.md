@@ -24,7 +24,11 @@ every push to `main` (it runs `npm test` and `npm run build` first).
 - `src/games/` — one folder per game; register new games in `src/games/index.ts`.
 - `src/games/super-pong/physics.ts` — pure, tested ball physics. Keep game rules here, not in rendering.
 - `src/games/super-pong/powerups.ts` — pure, tested power-up rules (when they spawn, where, pickup,
-  paddle growth). Power-ups go to whoever touched the ball last; growth lasts the whole match.
+  paddle growth). Every rally gets one 2–6 paddle hits in, then every 7–12. Power-ups go to whoever
+  touched the ball last; growth lasts the whole match and shows as gold segments on the paddle ends.
+- `src/engine/settings.ts` — toggles on the Debug screen (menu and pause). Add an entry to `SETTINGS`
+  and read it with `ctx.settings.get(id)`; the panel builds itself. Spin (off by default) lives
+  here; its physics is in `physics.ts` (`PhysOptions`).
 
 ## Conventions
 - Games draw in world units: the field is always 900 tall; width varies with aspect ratio.

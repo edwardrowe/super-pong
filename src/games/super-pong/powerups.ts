@@ -3,12 +3,10 @@
 import type { Ball, Field } from './physics';
 
 export const POWER = {
-  /** Chance that a rally has power-ups at all. */
-  chance: 0.75,
   /** Paddle hits into the rally before the first one appears. */
-  firstAfter: [3, 5] as const,
+  firstAfter: [2, 6] as const,
   /** Paddle hits between later ones in the same rally. */
-  thenEvery: [7, 15] as const,
+  thenEvery: [7, 12] as const,
   /** Pickup radius (world units). */
   radius: 38,
   /** Paddle growth per pickup, and the most pickups that count. */
@@ -22,14 +20,14 @@ const randInt = (lo: number, hi: number, rnd: Rnd) => lo + Math.floor(rnd() * (h
 
 /** Counts paddle hits through a rally and says when to spawn a power-up. */
 export class PowerSchedule {
-  /** Hits left until the next spawn; -1 = no more power-ups this rally. */
+  /** Hits left until the next spawn; -1 = none scheduled (before the first serve). */
   countdown = -1;
 
   constructor(private rnd: Rnd = Math.random) {}
 
   /** A new rally (serve) is starting. */
   startRally(): void {
-    this.countdown = this.rnd() < POWER.chance ? randInt(POWER.firstAfter[0], POWER.firstAfter[1], this.rnd) : -1;
+    this.countdown = randInt(POWER.firstAfter[0], POWER.firstAfter[1], this.rnd);
   }
 
   /** Call on every paddle hit. Returns true when a power-up should appear now. */

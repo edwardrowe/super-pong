@@ -1,6 +1,7 @@
 import { Sfx } from '../engine/audio';
 import { Input } from '../engine/input';
 import { Music, TRACKS } from '../engine/music';
+import { SETTINGS, Settings } from '../engine/settings';
 import { WORLD_H, type Game, type GameEntry, type View } from '../engine/types';
 import { GAMES } from '../games';
 import { Backdrop } from './backdrop';
@@ -16,6 +17,7 @@ export class Shell {
   private view!: View;
   private input: Input;
   private sfx = new Sfx();
+  private settings = new Settings();
   private music = new Music();
   private game: Game | null = null;
   private entry: GameEntry | null = null;
@@ -38,6 +40,11 @@ export class Shell {
     volMusic: $<HTMLInputElement>('vol-music'),
     volSfx: $<HTMLInputElement>('vol-sfx'),
     audioDone: $('audio-done'),
+    debugBtn: $('debug-btn'),
+    menuDebug: $('menu-debug'),
+    debug: $('debug'),
+    debugList: $('debug-list'),
+    debugDone: $('debug-done'),
     diag: $('diag'),
   };
 
@@ -66,8 +73,8 @@ export class Shell {
 
     window.addEventListener('keydown', (e) => {
       if (!this.game) return;
-      if (this.audioOpen) {
-        if (e.code === 'Escape') this.closeAudio();
+      if (this.panelOpen) {
+        if (e.code === 'Escape') this.closePanel();
         return;
       }
       if (e.code === 'Escape' || e.code === 'KeyP') this.paused ? this.resume() : this.pause();
@@ -101,7 +108,11 @@ export class Shell {
     this.ui.quit.addEventListener('click', () => this.quit());
     this.ui.sound.addEventListener('click', () => this.openAudio());
     this.ui.menuSound.addEventListener('click', () => this.openAudio());
-    this.ui.audioDone.addEventListener('click', () => this.closeAudio());
+    this.ui.audioDone.addEventListener('click', () => this.closePanel());
+    this.ui.debugBtn.addEventListener('click', () => this.openPanel(this.ui.debug));
+    this.ui.menuDebug.addEventListener('click', () => this.openPanel(this.ui.debug));
+    this.ui.debugDone.addEventListener('click', () => this.closePanel());
+    this.buildDebugPanel();
     this.buildAudioPanel();
     this.music.setLevel(0);
 
@@ -160,7 +171,7 @@ export class Shell {
     this.game?.dispose?.();
     this.entry = entry;
     this.input.reset();
-    this.game = entry.create({ input: this.input, sfx: this.sfx, music: this.music, view: this.view });
+    this.game = entry.create({ input: this.input, sfx: this.sfx, music: this.music, settings: this.settings, view: this.view });
     this.paused = false;
     this.music.muffle(false);
     this.ui.menu.classList.add('hidden');
@@ -203,8 +214,45 @@ export class Shell {
 
   // ---- sound panel ---------------------------------------------------------
 
-  private get audioOpen(): boolean {
-    return !this.ui.audio.classList.contains('hidden');
+  /** The Sound or Debug panel is showing. */
+  private get panelOpen(): boolean {
+    return !this.ui.audio.classList.contains('hidden') || !this.ui.debug.classList.contains('hidden');
+  }
+
+  private openPanel(panel: HTMLElement): void {
+    this.sfx.click();
+    panel.classList.remove('hidden');
+    this.ui.pause.classList.add('hidden');
+    this.ui.menu.classList.add('hidden');
+  }
+
+  /** Back to the pause screen (mid-game) or the main menu. */
+  private closePanel(): void {
+    this.sfx.click();
+    this.ui.audio.classList.add('hidden');
+    this.ui.debug.classList.add('hidden');
+    if (this.game) {
+      this.ui.pause.classList.remove('hidden');
+      this.music.muffle(this.paused);
+    } else this.ui.menu.classList.remove('hidden');
+  }
+
+  /** One switch per entry in SETTINGS; changes save immediately and apply live. */
+  private buildDebugPanel(): void {
+    for (const def of SETTINGS) {
+      const row = document.createElement('label');
+      row.className = 'toggle';
+      row.innerHTML = '<span class="toggle-text"><b></b><small></small></span><input type="checkbox" role="switch" /><i></i>';
+      row.querySelector('b')!.textContent = def.label;
+      row.querySelector('small')!.textContent = def.hint;
+      const box = row.querySelector('input')!;
+      box.checked = this.settings.get(def.id);
+      box.addEventListener('change', () => {
+        this.settings.set(def.id, box.checked);
+        this.sfx.click();
+      });
+      this.ui.debugList.appendChild(row);
+    }
   }
 
   private buildAudioPanel(): void {
@@ -255,21 +303,9 @@ export class Shell {
   }
 
   private openAudio(): void {
-    this.sfx.click();
     this.syncAudioPanel();
-    this.ui.audio.classList.remove('hidden');
-    this.ui.pause.classList.add('hidden');
-    this.ui.menu.classList.add('hidden');
+    this.openPanel(this.ui.audio);
     this.music.muffle(false); // hear the track you pick, even from the pause screen
-  }
-
-  private closeAudio(): void {
-    this.sfx.click();
-    this.ui.audio.classList.add('hidden');
-    if (this.game) {
-      this.ui.pause.classList.remove('hidden');
-      this.music.muffle(this.paused);
-    } else this.ui.menu.classList.remove('hidden');
   }
 }
 
