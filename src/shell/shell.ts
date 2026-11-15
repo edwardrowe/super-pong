@@ -104,6 +104,7 @@ export class Shell {
     this.ui.music.addEventListener('click', toggleMusic);
     this.ui.menuMusic.addEventListener('click', toggleMusic);
     this.music.setIntensity(0.25);
+    this.music.setTempo(1);
     this.syncSoundLabel();
 
     this.resize();
@@ -197,6 +198,7 @@ export class Shell {
     this.paused = false;
     this.music.muffle(false);
     this.music.setIntensity(0.25);
+    this.music.setTempo(1);
     this.ui.pause.classList.add('hidden');
     this.ui.pauseBtn.classList.add('hidden');
     this.ui.menu.classList.remove('hidden');

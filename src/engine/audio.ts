@@ -66,8 +66,39 @@ export class Sfx {
     this.noise(0.6, 0.55, 5000, 120, pan);
   }
 
+  /** The launch: a deep, punchy boom with a little click on top. */
   serve(): void {
-    this.tone(180, 760, 0.22, 'triangle', 0.16, 0);
+    const ctx = this.ctx;
+    const dest = this.out(0);
+    if (!ctx || !dest) return;
+    const t = ctx.currentTime;
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this.driveCurve();
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.7, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+    shaper.connect(g).connect(dest);
+    const boom = ctx.createOscillator();
+    boom.frequency.setValueAtTime(150, t);
+    boom.frequency.exponentialRampToValueAtTime(36, t + 0.4);
+    boom.connect(shaper);
+    const body = ctx.createOscillator();
+    body.type = 'sawtooth';
+    body.frequency.setValueAtTime(82, t);
+    body.frequency.exponentialRampToValueAtTime(41, t + 0.3);
+    const bf = ctx.createBiquadFilter();
+    bf.type = 'lowpass';
+    bf.frequency.setValueAtTime(900, t);
+    bf.frequency.exponentialRampToValueAtTime(90, t + 0.3);
+    const bg = ctx.createGain();
+    bg.gain.value = 0.5;
+    body.connect(bf).connect(bg).connect(shaper);
+    for (const o of [boom, body]) {
+      o.start(t);
+      o.stop(t + 0.6);
+    }
+    this.noise(0.05, 0.35, 4000, 600, 0);
   }
 
   win(): void {
@@ -133,58 +164,74 @@ export class Sfx {
   }
 
   /**
-   * A bass wobble that speeds up and rises while the ball materialises, ending right as it
-   * launches. dur should match the serve wind-up.
+   * Wind-up while the ball materialises: a deep, wide swell of detuned saws and sub that rises
+   * an octave, with a slow wobble that speeds up, ending as the ball launches. Kept low and
+   * un-resonant so it sounds big rather than nasal.
    */
-  wobble(dur: number): void {
+  charge(dur: number): void {
     const ctx = this.ctx;
     const dest = this.out(0);
-    if (!ctx || !dest) return;
+    if (!ctx || !dest || !this.noiseBuf) return;
     const t = ctx.currentTime;
+    const f0 = 41.2; // E1
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.Q.value = 12;
-    filter.frequency.value = 420;
+    filter.Q.value = 1.2;
+    filter.frequency.setValueAtTime(110, t);
+    filter.frequency.exponentialRampToValueAtTime(950, t + dur);
     const lfo = ctx.createOscillator();
-    lfo.frequency.setValueAtTime(3, t);
-    lfo.frequency.exponentialRampToValueAtTime(18, t + dur);
+    lfo.frequency.setValueAtTime(2, t);
+    lfo.frequency.exponentialRampToValueAtTime(9, t + dur);
     const depth = ctx.createGain();
-    depth.gain.setValueAtTime(380, t);
+    depth.gain.setValueAtTime(20, t);
+    depth.gain.linearRampToValueAtTime(260, t + dur);
     lfo.connect(depth).connect(filter.frequency);
 
     const shaper = ctx.createWaveShaper();
     shaper.curve = this.driveCurve();
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(0.42, t + 0.06);
-    g.gain.setValueAtTime(0.42, t + dur - 0.03);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.08);
+    g.gain.linearRampToValueAtTime(0.5, t + dur * 0.9);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.04);
     filter.connect(shaper).connect(g).connect(dest);
 
     const oscs: OscillatorNode[] = [lfo];
-    for (const [type, det] of [['sawtooth', -9], ['square', 9], ['sawtooth', 0]] as const) {
+    for (const det of [-14, -6, 0, 6, 14]) {
       const o = ctx.createOscillator();
-      o.type = type;
+      o.type = 'sawtooth';
       o.detune.value = det;
-      o.frequency.setValueAtTime(55, t);
-      o.frequency.setValueAtTime(55, t + dur * 0.55);
-      o.frequency.exponentialRampToValueAtTime(110, t + dur); // riser into the launch
+      o.frequency.setValueAtTime(f0 * 2, t);
+      o.frequency.exponentialRampToValueAtTime(f0 * 4, t + dur);
       o.connect(filter);
       oscs.push(o);
     }
     const sub = ctx.createOscillator();
-    sub.frequency.setValueAtTime(55, t);
-    sub.frequency.setValueAtTime(55, t + dur * 0.55);
-    sub.frequency.exponentialRampToValueAtTime(110, t + dur);
+    sub.frequency.setValueAtTime(f0, t);
+    sub.frequency.exponentialRampToValueAtTime(f0 * 2, t + dur);
     const sg = ctx.createGain();
-    sg.gain.value = 0.55;
+    sg.gain.value = 0.7;
     sub.connect(sg).connect(shaper);
     oscs.push(sub);
     for (const o of oscs) {
       o.start(t);
       o.stop(t + dur + 0.1);
     }
+
+    // A soft rush of air rising underneath.
+    const n = ctx.createBufferSource();
+    n.buffer = this.noiseBuf;
+    const nf = ctx.createBiquadFilter();
+    nf.type = 'lowpass';
+    nf.frequency.setValueAtTime(300, t);
+    nf.frequency.exponentialRampToValueAtTime(2500, t + dur);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.linearRampToValueAtTime(0.16, t + dur);
+    ng.gain.linearRampToValueAtTime(0.0001, t + dur + 0.05);
+    n.connect(nf).connect(ng).connect(dest);
+    n.start(t);
+    n.stop(t + dur + 0.1);
   }
 
   private driveCurve(): Float32Array<ArrayBuffer> {

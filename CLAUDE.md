@@ -30,6 +30,7 @@ every push to `main` (it runs `npm test` and `npm run build` first).
 - Touches belong to the half of the screen they started on.
 - Super Pong leaves a gutter behind each paddle for fingers; the ball scores at the goal line
   (`goalL`/`goalR` on the field), not the screen edge. The grid only covers the play area.
-- Every grid warp has a matching `sfx.warp(amount)` bass dive; the serve wind-up plays `sfx.wobble`.
+- Every grid warp has a matching `sfx.warp(amount)` bass dive; the serve wind-up plays `sfx.charge`,
+  then `sfx.serve` booms on launch. Music tempo pushes 10% at match point and 20% on the win screen.
 - Must stay smooth on phones: avoid per-frame allocations in hot loops, keep DPR capped at 2.
 - In dev builds `window.__shell` exposes the shell for debugging (`__shell.frame(1/60)` steps a frame).

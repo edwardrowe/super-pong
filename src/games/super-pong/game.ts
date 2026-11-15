@@ -150,13 +150,13 @@ export class SuperPong implements Game {
         this.ballCi = WHITE;
         Object.assign(this.ball, { x: w2, y: h / 2, vx: 0, vy: 0 });
         this.trail.length = 0;
-        this.g.sfx.wobble(SERVE_WINDUP);
+        this.g.sfx.charge(SERVE_WINDUP);
         break;
       case 'play':
         serve(this.ball, this.field, this.serveDir);
         this.acc = 0;
         this.g.sfx.serve();
-        this.g.sfx.warp(0.45, 0);
+        this.g.sfx.warp(0.3, 0);
         this.rings.push({ x: w2, y: h / 2, t: 0, dur: 0.4, maxR: 140, color: COLOR.white, width: 4 });
         this.particles.burst(w2, h / 2, { count: 30, color: [WHITE, GOLD], speed: [200, 600], life: [0.2, 0.5], drag: 3 });
         this.grid.impulse(w2, h / 2, 500, 260);
@@ -212,6 +212,9 @@ export class SuperPong implements Game {
     }
 
     this.g.music.setIntensity(this.musicIntensity());
+    // Push the tempo when someone is one point from winning, and again on the win screen.
+    const top = Math.max(this.score[0], this.score[1]);
+    this.g.music.setTempo(this.phase === 'won' ? 1.2 : top >= WIN_SCORE - 1 ? 1.1 : 1);
     this.particles.update(sdt);
     this.grid.update(sdt);
     for (const r of this.rings) r.t += sdt;
