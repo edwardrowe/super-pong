@@ -69,6 +69,18 @@ export class Sfx {
     this.noise(0.6, 0.55, 5000, 120, pan);
   }
 
+  /** The winning goal blows up the loser's paddle: a huge boom, a long rumble, crackling debris. */
+  explode(pan: number): void {
+    this.tone(150, 22, 1.6, 'sine', 1.0, pan, 0.04);
+    this.tone(240, 28, 1.0, 'sawtooth', 0.22, pan, 0.04);
+    this.tone(70, 24, 2.2, 'sine', 0.6, pan, 0.25);
+    this.noise(1.8, 0.9, 9000, 50, pan);
+    for (let i = 0; i < 9; i++) {
+      const f = 300 + Math.random() * 900;
+      this.tone(f, f * 0.4, 0.06, 'square', 0.05, pan + (Math.random() - 0.5) * 0.6, 0.2 + i * 0.09 + Math.random() * 0.05);
+    }
+  }
+
   /** The launch: a deep, punchy boom with a little click on top. */
   serve(): void {
     const ctx = this.ctx;

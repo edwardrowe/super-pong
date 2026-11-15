@@ -65,6 +65,21 @@ interface PowerUp {
   t: number;
 }
 
+/** A chunk of an exploded paddle. */
+interface Debris {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  a: number;
+  va: number;
+  w: number;
+  h: number;
+  t: number;
+  life: number;
+  color: string;
+}
+
 interface Ring {
   x: number;
   y: number;
@@ -128,6 +143,9 @@ export class SuperPong implements Game {
   /** Who touched the ball last (they get any power-up it hits). */
   private lastHit: Side | -1 = -1;
   private popups: Popup[] = [];
+  /** The loser's paddle is blown apart by the winning goal (until the rematch). */
+  private destroyed: Side | -1 = -1;
+  private debris: Debris[] = [];
 
   private events: BallEvent[] = [];
   private rings: Ring[] = [];
@@ -202,6 +220,7 @@ export class SuperPong implements Game {
       this.fizzlePower();
       this.g.music.newMatch();
       this.serveDir = this.winner === 0 ? 1 : -1;
+      this.rebuildPaddle();
       this.enter('intro');
     } else if (this.phase === 'intro' && this.phaseT > 0.3) {
       this.enter('serve');
@@ -303,6 +322,7 @@ export class SuperPong implements Game {
     const top = Math.max(this.score[0], this.score[1]);
     this.g.music.setLevel(this.phase === 'won' ? MAX_LEVEL : Math.min(MAX_LEVEL - 1, 1 + top));
     this.particles.update(sdt);
+    if (this.debris.length) this.updateDebris(sdt);
     this.grid.update(sdt);
     for (const r of this.rings) r.t += sdt;
     this.rings = this.rings.filter((r) => r.t < r.dur);
@@ -430,6 +450,7 @@ export class SuperPong implements Game {
         sfx.warp(1, pan);
         this.g.music.sweep();
         buzz([45, 30, 80]);
+        if (this.score[s] >= WIN_SCORE) this.explodePaddle(s === 0 ? 1 : 0);
         this.enter('scored');
         break;
       }
@@ -589,6 +610,115 @@ export class SuperPong implements Game {
     this.particles.burst(pw.x, pw.y, { count: 18, color: [GOLD, WHITE], speed: [60, 260], life: [0.2, 0.45], drag: 4 });
   }
 
+  // ---- match point --------------------------------------------------------------
+
+  /** The winning goal blows the loser's paddle apart: chunks, fire, a shockwave across the court. */
+  private explodePaddle(side: Side): void {
+    const p = this.paddles[side];
+    const col = COLOR.player[side];
+    const ci = pc(side);
+    const away = side === 0 ? 1 : -1; // toward the middle of the court
+    this.destroyed = side;
+    // Chunks: the paddle sliced along its length, flung toward mid-court, tumbling under gravity.
+    const n = 12;
+    const ph = p.h / n;
+    for (let i = 0; i < n; i++) {
+      const y = p.y - p.h / 2 + ph * (i + 0.5);
+      const spread = (y - p.y) / (p.h / 2); // -1 top .. 1 bottom
+      const speed = 500 + Math.random() * 1100;
+      this.debris.push({
+        x: p.x,
+        y,
+        vx: away * speed * (0.5 + Math.random() * 0.6),
+        vy: spread * 500 + (Math.random() - 0.65) * 900,
+        a: 0,
+        va: (Math.random() - 0.5) * 22,
+        w: p.w * (0.55 + Math.random() * 0.3),
+        h: ph * (0.6 + Math.random() * 0.5),
+        t: 0,
+        life: 2.2 + Math.random() * 1.2,
+        color: Math.random() < 0.25 ? COLOR.white : col,
+      });
+    }
+    this.particles.burst(p.x, p.y, { count: 420, color: [ci, ci, WHITE, GOLD], speed: [150, 2200], angle: side === 0 ? 0 : Math.PI, spread: Math.PI * 1.6, life: [0.6, 1.8], drag: 1.3 });
+    this.particles.burst(p.x, p.y, { count: 120, color: [ci, WHITE, GOLD], kind: Kind.Dot, speed: [60, 1100], life: [0.8, 2.2], size: [24, 80], drag: 1.8, gravity: 200 });
+    this.rings.push(
+      { x: p.x, y: p.y, t: -0.05, dur: 0.5, maxR: 500, color: COLOR.white, width: 14 },
+      { x: p.x, y: p.y, t: -0.12, dur: 1.0, maxR: 1300, color: col, width: 8 },
+      { x: p.x, y: p.y, t: -0.25, dur: 1.5, maxR: 2400, color: COLOR.gold, width: 4 },
+    );
+    this.grid.impulse(p.x, p.y, 5000, 1100);
+    this.shake.add(1.6);
+    this.flash = 0.9;
+    this.flashColor = COLOR.white;
+    this.hitstop = 0.22;
+    this.timeScale = 0.12;
+    const pan = (p.x / this.field.w) * 2 - 1;
+    this.g.sfx.explode(pan);
+    this.g.sfx.warp(1, pan);
+    buzz([80, 40, 160]);
+  }
+
+  /** Rematch: the shattered paddle reforms, sparks rushing back together. */
+  private rebuildPaddle(): void {
+    const side = this.destroyed;
+    if (side === -1) return;
+    this.destroyed = -1;
+    this.debris.length = 0;
+    const p = this.paddles[side];
+    for (let i = 0; i < 70; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 120 + Math.random() * 200;
+      const life = 0.35 + Math.random() * 0.15;
+      const tx = p.x;
+      const ty = p.y + (Math.random() - 0.5) * p.h;
+      this.particles.spawn(tx + Math.cos(a) * d, ty + Math.sin(a) * d, (-Math.cos(a) * d) / life, (-Math.sin(a) * d) / life, life, 3, Math.random() < 0.6 ? pc(side) : WHITE, Kind.Streak, 0);
+    }
+    this.rings.push({ x: p.x, y: p.y, t: -0.35, dur: 0.4, maxR: 200, color: COLOR.player[side], width: 4 });
+    p.flash = 1;
+    p.squashV = 16;
+  }
+
+  private updateDebris(dt: number): void {
+    const { h } = this.field;
+    for (const d of this.debris) {
+      d.t += dt;
+      d.vy += 1400 * dt;
+      d.vx *= Math.exp(-0.6 * dt);
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      d.a += d.va * dt;
+      // Bounce off the floor and ceiling, losing energy.
+      if (d.y > h - 8 && d.vy > 0) {
+        d.y = h - 8;
+        d.vy *= -0.45;
+        d.vx *= 0.7;
+        d.va *= 0.6;
+        if (Math.abs(d.vy) > 120) this.particles.burst(d.x, d.y, { count: 4, color: [WHITE, GOLD], speed: [60, 260], angle: -Math.PI / 2, spread: 2, life: [0.1, 0.3], drag: 5 });
+      } else if (d.y < 8 && d.vy < 0) {
+        d.y = 8;
+        d.vy *= -0.45;
+      }
+      // Burning: trail embers while fast.
+      if (Math.random() < dt * 30 && d.t < d.life * 0.6) {
+        this.particles.spawn(d.x, d.y, (Math.random() - 0.5) * 60, (Math.random() - 0.5) * 60, 0.3 + Math.random() * 0.3, 10 + Math.random() * 14, Math.random() < 0.5 ? GOLD : WHITE, Kind.Dot, 2);
+      }
+    }
+    this.debris = this.debris.filter((d) => d.t < d.life);
+  }
+
+  private drawDebris(ctx: CanvasRenderingContext2D): void {
+    for (const d of this.debris) {
+      const fade = 1 - Math.max(0, (d.t - d.life * 0.6) / (d.life * 0.4));
+      const hot = Math.exp(-2.5 * d.t);
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(d.a);
+      glowRect(ctx, 0, 0, d.w, d.h, whiten(d.color, hot * 0.7), (0.9 + hot) * fade);
+      ctx.restore();
+    }
+  }
+
   /** Particles rushing into the centre as the ball materialises. */
   private implode(x: number, y: number, dt: number): void {
     const n = Math.ceil(dt * 260);
@@ -648,6 +778,7 @@ export class SuperPong implements Game {
       glowRing(ctx, r.x, r.y, r.maxR * easeOutCubic(f), r.color, r.width * (1 - f * 0.7), 1 - f);
     }
     this.drawPower(ctx);
+    this.drawDebris(ctx);
     this.drawPaddles(ctx);
     if (this.ballVisible) this.drawBall(ctx);
     this.drawPopups(ctx);
@@ -842,6 +973,7 @@ export class SuperPong implements Game {
    */
   private drawPaddles(ctx: CanvasRenderingContext2D): void {
     for (const side of [0, 1] as const) {
+      if (side === this.destroyed) continue;
       const p = this.paddles[side];
       const col = COLOR.player[side];
       const sx = Math.max(0.5, 1 + 0.9 * p.squash);
