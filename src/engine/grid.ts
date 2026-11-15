@@ -9,6 +9,7 @@ export class SpringGrid {
   private rows = 0;
   private sx = 0;
   private sy = 0;
+  private ox = 0;
   private dx = new Float32Array(0);
   private dy = new Float32Array(0);
   private vx = new Float32Array(0);
@@ -19,7 +20,9 @@ export class SpringGrid {
     private color = '#3b4cff',
   ) {}
 
-  resize(w: number, h: number): void {
+  /** The grid covers x0..x0+w, 0..h. */
+  resize(w: number, h: number, x0 = 0): void {
+    this.ox = x0;
     this.cols = Math.max(2, Math.round(w / this.spacing) + 1);
     this.rows = Math.max(2, Math.round(h / this.spacing) + 1);
     this.sx = w / (this.cols - 1);
@@ -37,7 +40,7 @@ export class SpringGrid {
     for (let j = 1; j < this.rows - 1; j++) {
       for (let i = 1; i < this.cols - 1; i++) {
         const k = j * this.cols + i;
-        const px = i * this.sx + this.dx[k] - x;
+        const px = i * this.sx + this.ox + this.dx[k] - x;
         const py = j * this.sy + this.dy[k] - y;
         const d2 = px * px + py * py;
         if (d2 > r2 || d2 < 1) continue;
@@ -90,7 +93,7 @@ export class SpringGrid {
     for (let j = 0; j < rows; j++) {
       for (let i = 0; i < cols; i++) {
         const k = j * cols + i;
-        const x = i * sx;
+        const x = this.ox + i * sx;
         const y = j * sy;
         if (i < cols - 1) seg(k, k + 1, x, y, x + sx, y);
         if (j < rows - 1) seg(k, k + cols, x, y, x, y + sy);

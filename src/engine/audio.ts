@@ -6,6 +6,8 @@
 export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  /** Shared output (compressed) that the music also plays into. */
+  bus: AudioNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
   muted = localStorage.getItem('muted') === '1';
 
@@ -20,12 +22,22 @@ export class Sfx {
       this.master = this.ctx.createGain();
       this.master.gain.value = this.muted ? 0 : 0.55;
       this.master.connect(comp).connect(this.ctx.destination);
+      this.bus = comp;
       const len = this.ctx.sampleRate;
       this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const d = this.noiseBuf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
+  }
+
+  get context(): AudioContext | null {
+    return this.ctx;
+  }
+
+  /** Stop all audio while the page is hidden. */
+  suspend(): void {
+    if (this.ctx?.state === 'running') void this.ctx.suspend();
   }
 
   setMuted(m: boolean): void {

@@ -1,5 +1,6 @@
 import type { Input } from './input';
 import type { Sfx } from './audio';
+import type { Music } from './music';
 
 /** Screen geometry. Games draw in world units: the play field is always WORLD_H tall. */
 export interface View {
@@ -23,6 +24,7 @@ export type Side = 0 | 1;
 export interface GameContext {
   input: Input;
   sfx: Sfx;
+  music: Music;
   view: View;
 }
 

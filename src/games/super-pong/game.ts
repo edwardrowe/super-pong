@@ -1,5 +1,5 @@
 import { buzz } from '../../engine/audio';
-import { drawGlow, glowLine, glowRing, glowStroke, rgba, whiten } from '../../engine/glow';
+import { drawGlow, glowLine, glowRect, glowRing, glowStroke, rgba, whiten } from '../../engine/glow';
 import { SpringGrid } from '../../engine/grid';
 import { Kind, Particles } from '../../engine/particles';
 import { Shake } from '../../engine/shake';
@@ -26,7 +26,9 @@ const pc = (s: Side) => (s === 0 ? 1 : 2);
 const FONT = 'Futura, "Avenir Next", "Century Gothic", "Trebuchet MS", system-ui, sans-serif';
 const WIN_SCORE = 7;
 const STEP = 1 / 240;
-const PADDLE = { w: 18, h: 170, fromEdge: 70, keySpeed: 1400 };
+const PADDLE = { w: 22.5, h: 170, fromEdge: 140, keySpeed: 1400 };
+/** Goal lines sit just behind the paddles; the gutter outside them is room for fingers. */
+const GOAL_FROM_EDGE = 105;
 const BALL_R = 14;
 const TRAIL_LEN = 40;
 
@@ -54,7 +56,7 @@ const easeOutBack = (t: number) => 1 + 2.7 * (t - 1) ** 3 + 1.7 * (t - 1) ** 2;
 
 export class SuperPong implements Game {
   private view: View;
-  private field: Field = { w: 0, h: WORLD_H };
+  private field: Field & { goalL: number; goalR: number } = { w: 0, h: WORLD_H, goalL: 0, goalR: 0 };
   private paddles: [PaddleState, PaddleState];
   private ball: Ball = { x: 0, y: 0, vx: 0, vy: 0, r: BALL_R };
   private ballColor = COLOR.white;
@@ -100,15 +102,20 @@ export class SuperPong implements Game {
   resize(view: View): void {
     const oldW = this.field.w;
     this.view = view;
-    this.field = { w: view.w, h: view.h };
+    this.field = { w: view.w, h: view.h, goalL: view.inset.l + GOAL_FROM_EDGE, goalR: view.w - view.inset.r - GOAL_FROM_EDGE };
     this.paddles[0].x = view.inset.l + PADDLE.fromEdge;
     this.paddles[1].x = view.w - view.inset.r - PADDLE.fromEdge;
     for (const p of this.paddles) p.y = clamp(p.y, p.h / 2, view.h - p.h / 2);
     if (oldW > 0 && this.phase === 'play') this.ball.x *= view.w / oldW;
-    else this.ball.x = view.w / 2;
+    else this.ball.x = this.mid;
     this.trail.length = 0;
-    this.grid.resize(view.w, view.h);
+    this.grid.resize(this.field.goalR - this.field.goalL, view.h, this.field.goalL);
     this.vignette = makeVignette(view.w, view.h);
+  }
+
+  /** Centre of the play area (between the goal lines). */
+  private get mid(): number {
+    return (this.field.goalL + this.field.goalR) / 2;
   }
 
   onPress(_side: Side | -1): void {
@@ -125,7 +132,8 @@ export class SuperPong implements Game {
   private enter(phase: Phase): void {
     this.phase = phase;
     this.phaseT = 0;
-    const { w, h } = this.field;
+    const { h } = this.field;
+    const w2 = this.mid;
     switch (phase) {
       case 'intro':
         this.ballVisible = false;
@@ -136,16 +144,16 @@ export class SuperPong implements Game {
         this.ballScale = 0;
         this.ballColor = COLOR.white;
         this.ballCi = WHITE;
-        Object.assign(this.ball, { x: w / 2, y: h / 2, vx: 0, vy: 0 });
+        Object.assign(this.ball, { x: w2, y: h / 2, vx: 0, vy: 0 });
         this.trail.length = 0;
         break;
       case 'play':
         serve(this.ball, this.field, this.serveDir);
         this.acc = 0;
         this.g.sfx.serve();
-        this.rings.push({ x: w / 2, y: h / 2, t: 0, dur: 0.4, maxR: 140, color: COLOR.white, width: 4 });
-        this.particles.burst(w / 2, h / 2, { count: 30, color: [WHITE, GOLD], speed: [200, 600], life: [0.2, 0.5], drag: 3 });
-        this.grid.impulse(w / 2, h / 2, 500, 260);
+        this.rings.push({ x: w2, y: h / 2, t: 0, dur: 0.4, maxR: 140, color: COLOR.white, width: 4 });
+        this.particles.burst(w2, h / 2, { count: 30, color: [WHITE, GOLD], speed: [200, 600], life: [0.2, 0.5], drag: 3 });
+        this.grid.impulse(w2, h / 2, 500, 260);
         break;
       case 'scored':
         this.ballVisible = false;
@@ -153,6 +161,7 @@ export class SuperPong implements Game {
       case 'won':
         this.fireworkT = 0.15;
         this.g.sfx.win();
+        this.g.music.sweep(2.5);
         break;
     }
   }
@@ -179,9 +188,8 @@ export class SuperPong implements Game {
         if (this.phaseT > (this.firstIntro ? 2.0 : 0.9)) this.enter('serve');
         break;
       case 'serve': {
-        const { w, h } = this.field;
         this.ballScale = easeOutBack(Math.min(1, this.phaseT / 0.7));
-        if (this.phaseT < 0.55) this.implode(w / 2, h / 2, dt);
+        if (this.phaseT < 0.55) this.implode(this.mid, this.field.h / 2, dt);
         if (this.phaseT >= 0.85) this.enter('play');
         break;
       }
@@ -197,6 +205,7 @@ export class SuperPong implements Game {
         break;
     }
 
+    this.g.music.setIntensity(this.musicIntensity());
     this.particles.update(sdt);
     this.grid.update(sdt);
     for (const r of this.rings) r.t += sdt;
@@ -205,6 +214,18 @@ export class SuperPong implements Game {
     this.wallHits = this.wallHits.filter((w) => w.t < 0.35);
     this.scoreT[0] += dt;
     this.scoreT[1] += dt;
+  }
+
+  /** The soundtrack builds as rallies get faster and peaks on the win screen. */
+  private musicIntensity(): number {
+    switch (this.phase) {
+      case 'play':
+        return 0.62 + 0.38 * speedFrac(speedOf(this.ball));
+      case 'won':
+        return 1;
+      default:
+        return 0.5;
+    }
   }
 
   private updatePaddles(dt: number): void {
@@ -282,7 +303,7 @@ export class SuperPong implements Game {
         if (this.score[s] >= WIN_SCORE) this.winner = s;
         const gx = clamp(e.x, 0, this.field.w);
         const gy = clamp(e.y, 0, this.field.h);
-        const into = e.x <= 0 ? 0 : Math.PI;
+        const into = e.x < this.mid ? 0 : Math.PI;
         this.particles.burst(gx, gy, { count: 280, color: [ci, ci, WHITE, GOLD], speed: [200, 1800], angle: into, spread: Math.PI * 1.3, life: [0.5, 1.4], drag: 1.6 });
         this.particles.burst(gx, gy, { count: 70, color: [ci, WHITE], kind: Kind.Dot, speed: [80, 900], angle: into, spread: Math.PI, life: [0.6, 1.6], size: [20, 60], drag: 2.2 });
         this.rings.push(
@@ -298,6 +319,7 @@ export class SuperPong implements Game {
         this.timeScale = 0.2;
         this.trail.length = 0;
         sfx.goal(pan);
+        this.g.music.sweep();
         buzz([45, 30, 80]);
         this.enter('scored');
         break;
@@ -329,9 +351,9 @@ export class SuperPong implements Game {
     this.fireworkT -= dt;
     if (this.fireworkT > 0 || this.phaseT > 6) return;
     this.fireworkT = 0.22 + Math.random() * 0.2;
-    const { w, h } = this.field;
-    const half = this.winner === 0 ? 0 : w / 2;
-    const x = half + w * (0.08 + Math.random() * 0.34);
+    const { w, h, goalL, goalR } = this.field;
+    const halfW = (goalR - goalL) / 2;
+    const x = (this.winner === 0 ? goalL : this.mid) + halfW * (0.15 + Math.random() * 0.7);
     const y = h * (0.15 + Math.random() * 0.55);
     const ci = pc(this.winner);
     this.particles.burst(x, y, { count: 110, color: [ci, ci, WHITE, GOLD], speed: [80, 620], life: [0.7, 1.5], drag: 1.3, gravity: 380 });
@@ -378,13 +400,24 @@ export class SuperPong implements Game {
   }
 
   private drawArena(ctx: CanvasRenderingContext2D): void {
-    const { w, h } = this.field;
+    const { w, h, goalL, goalR } = this.field;
+    const m = this.mid;
     ctx.beginPath();
     for (let y = 18; y < h; y += 46) {
-      ctx.moveTo(w / 2, y);
-      ctx.lineTo(w / 2, Math.min(h - 18, y + 20));
+      ctx.moveTo(m, y);
+      ctx.lineTo(m, Math.min(h - 18, y + 20));
     }
     glowStroke(ctx, '#7b86ff', 2.2, 0.35);
+    // Gutters: a faint tint in each player's colour (brighter while their finger is down) and the goal line.
+    for (const side of [0, 1] as const) {
+      const col = COLOR.player[side];
+      const touch = this.g.input.isTouching(side) ? 1 : 0;
+      const x = side === 0 ? goalL : goalR;
+      ctx.fillStyle = rgba(col, 0.022 + touch * 0.035);
+      if (side === 0) ctx.fillRect(0, 0, goalL, h);
+      else ctx.fillRect(goalR, 0, w - goalR, h);
+      glowLine(ctx, x, 0, x, h, col, 1.4, 0.22 + touch * 0.15);
+    }
     glowLine(ctx, 0, 3, w, 3, COLOR.wall, 3, 0.55);
     glowLine(ctx, 0, h - 3, w, h - 3, COLOR.wall, 3, 0.55);
     for (const hit of this.wallHits) {
@@ -394,7 +427,7 @@ export class SuperPong implements Game {
   }
 
   private drawScores(ctx: CanvasRenderingContext2D): void {
-    const { w, h } = this.field;
+    const { h } = this.field;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const s of [0, 1] as const) {
@@ -402,7 +435,8 @@ export class SuperPong implements Game {
       const pop = 1 + 0.9 * Math.exp(-5 * t) * Math.cos(15 * t);
       const bright = Math.exp(-3 * t);
       ctx.save();
-      ctx.translate(s === 0 ? w * 0.25 : w * 0.75, h / 2);
+      const q = (this.field.goalR - this.field.goalL) / 4;
+      ctx.translate(this.mid + (s === 0 ? -q : q), h / 2);
       ctx.scale(pop, pop);
       ctx.font = `700 280px ${FONT}`;
       ctx.fillStyle = rgba(COLOR.player[s], 0.09 + 0.55 * bright);
@@ -438,10 +472,9 @@ export class SuperPong implements Game {
       const col = COLOR.player[side];
       const sx = Math.max(0.5, 1 + 0.9 * p.squash);
       const sy = Math.max(0.6, 1 - 0.14 * p.squash);
-      const half = (p.h / 2) * sy;
       const touch = this.g.input.isTouching(side) ? 0.15 : 0;
       drawGlow(ctx, col, p.x, p.y, p.h * 1.5, 0.1 + p.flash * 0.35 + touch * 0.3);
-      glowLine(ctx, p.x, p.y - half, p.x, p.y + half, p.flash > 0 ? whiten(col, p.flash * 0.7) : col, p.w * 0.55 * sx, 0.85 + p.flash * 0.6 + touch);
+      glowRect(ctx, p.x, p.y, p.w * 0.72 * sx, p.h * sy, p.flash > 0 ? whiten(col, p.flash * 0.7) : col, 0.85 + p.flash * 0.5 + touch);
     }
   }
 
@@ -459,7 +492,8 @@ export class SuperPong implements Game {
   }
 
   private drawText(ctx: CanvasRenderingContext2D): void {
-    const { w, h } = this.field;
+    const { h } = this.field;
+    const w = this.mid * 2;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     if (this.phase === 'intro') {

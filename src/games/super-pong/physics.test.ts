@@ -82,6 +82,21 @@ describe('stepBall', () => {
     expect(e).toMatchObject({ type: 'goal', scorer: 0 });
   });
 
+  it('scores at the goal lines, not the screen edge, when they are set', () => {
+    const f = { ...field, goalL: 105, goalR: 1495 };
+    const ball = mkBall({ x: 300, y: 100, vx: -800 });
+    const out: BallEvent[] = [];
+    let goal: BallEvent | undefined;
+    for (let i = 0; i < 2000 && !goal; i++) {
+      out.length = 0;
+      stepBall(ball, mkPaddles(800), f, 1 / 240, out);
+      goal = out.find((e) => e.type === 'goal');
+    }
+    expect(goal).toMatchObject({ type: 'goal', scorer: 1, x: 105 });
+    expect(ball.x + ball.r).toBeLessThan(105);
+    expect(ball.x).toBeGreaterThan(80);
+  });
+
   it('ignores a paddle when the ball is moving away from it', () => {
     const ball = mkBall({ x: 100, y: 450, vx: 800 });
     const out: BallEvent[] = [];

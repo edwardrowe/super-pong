@@ -84,6 +84,23 @@ export function glowLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, 
   glowStroke(ctx, color, width, intensity);
 }
 
+/** A glowing rounded rectangle centred on (cx, cy): stacked fills that grow and fade outward. */
+export function glowRect(ctx: CanvasRenderingContext2D, cx: number, cy: number, w: number, h: number, color: string, intensity = 1): void {
+  const passes: [pad: number, alpha: number, white: number][] = [
+    [w * 1.5, 0.05, 0],
+    [w * 0.75, 0.1, 0],
+    [w * 0.3, 0.28, 0.1],
+    [0, 0.9, 0.3],
+    [-w * 0.28, 0.85, 0.85],
+  ];
+  for (const [pad, a, white] of passes) {
+    ctx.fillStyle = rgba(white ? whiten(color, white) : color, a * intensity);
+    ctx.beginPath();
+    ctx.roundRect(cx - w / 2 - pad, cy - h / 2 - pad, w + pad * 2, h + pad * 2, Math.max(1.5, 3 + pad));
+    ctx.fill();
+  }
+}
+
 export function glowRing(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, width: number, intensity = 1): void {
   if (r <= 0) return;
   ctx.beginPath();

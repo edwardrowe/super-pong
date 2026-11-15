@@ -1,5 +1,6 @@
 import { Sfx } from '../engine/audio';
 import { Input } from '../engine/input';
+import { Music } from '../engine/music';
 import { WORLD_H, type Game, type GameEntry, type View } from '../engine/types';
 import { GAMES } from '../games';
 import { Backdrop } from './backdrop';
@@ -15,6 +16,7 @@ export class Shell {
   private view!: View;
   private input: Input;
   private sfx = new Sfx();
+  private music = new Music();
   private game: Game | null = null;
   private entry: GameEntry | null = null;
   private paused = false;
@@ -29,6 +31,8 @@ export class Shell {
     resume: $('resume'),
     restart: $('restart'),
     sound: $('sound'),
+    music: $('music'),
+    menuMusic: $('menu-music'),
     quit: $('quit'),
   };
 
@@ -43,7 +47,10 @@ export class Shell {
       if (this.game && !this.paused && !this.portrait.matches) this.game.onPress?.(side);
     });
 
-    const unlock = () => this.sfx.unlock();
+    const unlock = () => {
+      this.sfx.unlock();
+      if (this.sfx.context && this.sfx.bus) this.music.attach(this.sfx.context, this.sfx.bus);
+    };
     document.addEventListener('pointerdown', unlock, { capture: true });
     document.addEventListener('keydown', unlock, { capture: true });
 
@@ -58,7 +65,10 @@ export class Shell {
     window.visualViewport?.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', () => setTimeout(onResize, 250));
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) this.pause();
+      if (document.hidden) {
+        this.pause();
+        this.sfx.suspend();
+      }
     });
 
     for (const g of GAMES) {
@@ -80,6 +90,14 @@ export class Shell {
       this.syncSoundLabel();
       this.sfx.click();
     });
+    const toggleMusic = () => {
+      this.music.setEnabled(!this.music.enabled);
+      this.syncSoundLabel();
+      this.sfx.click();
+    };
+    this.ui.music.addEventListener('click', toggleMusic);
+    this.ui.menuMusic.addEventListener('click', toggleMusic);
+    this.music.setIntensity(0.25);
     this.syncSoundLabel();
 
     this.resize();
@@ -137,8 +155,9 @@ export class Shell {
     this.game?.dispose?.();
     this.entry = entry;
     this.input.reset();
-    this.game = entry.create({ input: this.input, sfx: this.sfx, view: this.view });
+    this.game = entry.create({ input: this.input, sfx: this.sfx, music: this.music, view: this.view });
     this.paused = false;
+    this.music.muffle(false);
     this.ui.menu.classList.add('hidden');
     this.ui.pause.classList.add('hidden');
     this.ui.pauseBtn.classList.remove('hidden');
@@ -148,6 +167,7 @@ export class Shell {
   private pause(): void {
     if (!this.game || this.paused) return;
     this.paused = true;
+    this.music.muffle(true);
     this.ui.pause.classList.remove('hidden');
     this.ui.pauseBtn.classList.add('hidden');
   }
@@ -155,6 +175,7 @@ export class Shell {
   private resume(): void {
     this.sfx.click();
     this.paused = false;
+    this.music.muffle(false);
     this.input.reset();
     this.ui.pause.classList.add('hidden');
     this.ui.pauseBtn.classList.remove('hidden');
@@ -166,6 +187,8 @@ export class Shell {
     this.game = null;
     this.entry = null;
     this.paused = false;
+    this.music.muffle(false);
+    this.music.setIntensity(0.25);
     this.ui.pause.classList.add('hidden');
     this.ui.pauseBtn.classList.add('hidden');
     this.ui.menu.classList.remove('hidden');
@@ -173,6 +196,9 @@ export class Shell {
 
   private syncSoundLabel(): void {
     this.ui.sound.textContent = this.sfx.muted ? 'Sound: Off' : 'Sound: On';
+    const m = this.music.enabled ? 'Music: On' : 'Music: Off';
+    this.ui.music.textContent = m;
+    this.ui.menuMusic.textContent = m;
   }
 }
 

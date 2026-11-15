@@ -21,7 +21,12 @@ export interface Paddle {
 export interface Field {
   w: number;
   h: number;
+  /** Goal lines: the ball scores once it is fully past one. Default to the screen edges. */
+  goalL?: number;
+  goalR?: number;
 }
+
+export const goalLines = (f: Field): [number, number] => [f.goalL ?? 0, f.goalR ?? f.w];
 
 export const PHYS = {
   serveSpeed: 760,
@@ -46,7 +51,8 @@ export const speedOf = (b: Ball) => Math.hypot(b.vx, b.vy);
 export const speedFrac = (speed: number) => Math.max(0, Math.min(1, (speed - PHYS.serveSpeed) / (PHYS.maxSpeed - PHYS.serveSpeed)));
 
 export function serve(ball: Ball, field: Field, dir: 1 | -1, rnd: () => number = Math.random): void {
-  ball.x = field.w / 2;
+  const [gl, gr] = goalLines(field);
+  ball.x = (gl + gr) / 2;
   ball.y = field.h / 2;
   const a = (rnd() * 2 - 1) * PHYS.serveAngle;
   ball.vx = Math.cos(a) * PHYS.serveSpeed * dir;
@@ -77,12 +83,13 @@ export function stepBall(ball: Ball, paddles: readonly [Paddle, Paddle], field: 
     out.push({ type: 'wall', x: ball.x, y: field.h, top: false });
   }
 
-  if (ball.x + ball.r < 0) {
-    out.push({ type: 'goal', scorer: 1, x: 0, y: ball.y });
+  const [gl, gr] = goalLines(field);
+  if (ball.x + ball.r < gl) {
+    out.push({ type: 'goal', scorer: 1, x: gl, y: ball.y });
     return true;
   }
-  if (ball.x - ball.r > field.w) {
-    out.push({ type: 'goal', scorer: 0, x: field.w, y: ball.y });
+  if (ball.x - ball.r > gr) {
+    out.push({ type: 'goal', scorer: 0, x: gr, y: ball.y });
     return true;
   }
   return false;
