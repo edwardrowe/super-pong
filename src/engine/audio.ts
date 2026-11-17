@@ -81,6 +81,18 @@ export class Sfx {
     }
   }
 
+  /** A bomb ball going off: a heavy, crunchy boom. */
+  blast(pan: number): void {
+    this.tone(130, 26, 0.9, 'sine', 0.85, pan);
+    this.tone(200, 30, 0.6, 'sawtooth', 0.18, pan);
+    this.noise(1.0, 0.7, 7000, 70, pan);
+  }
+
+  /** A bomb ball's warning beep. */
+  bombTick(pan: number): void {
+    this.tone(1760, 1700, 0.05, 'square', 0.045, pan);
+  }
+
   /** The launch: a deep, punchy boom with a little click on top. */
   serve(): void {
     const ctx = this.ctx;

@@ -8,6 +8,7 @@ import { WORLD_H, type Game, type GameContext, type Side, type View } from '../.
 import { PHYS, brake, serve, speedFrac, speedOf, stepBall, type Ball, type BallEvent, type Field, type Paddle, type PhysOptions } from './physics';
 import { POWER, PowerSchedule, grownHeight, spawnPoint, touches } from './powerups';
 import { ITEMS, ITEM_SLOTS, Inventory, SLOW, type ItemId } from './items';
+import { BOMB, addHole, blastPaddle, launchVelocity, solidPieces } from './bombs';
 
 // ---- look & tuning ---------------------------------------------------------
 
@@ -20,16 +21,26 @@ const COLOR = {
   bg: '#05050c',
 };
 // Particle palette indices.
-const PAL = [COLOR.white, COLOR.player[0], COLOR.player[1], COLOR.gold, COLOR.wall, ITEMS.slow.color];
+const PAL = [COLOR.white, COLOR.player[0], COLOR.player[1], COLOR.gold, COLOR.wall, ITEMS.slow.color, BOMB.color, '#ff9a3b'];
 const WHITE = 0;
 const GOLD = 3;
 const WALL = 4;
 const ICE = 5;
-/** Item slot size (world units); the slots sit at the bottom of each finger gutter. */
+const RED = 6;
+const FIRE = 7;
+const FIRE_COLOR = '#ff9a3b';
+/** Item slot size (world units); the slots stack up from the bottom of each finger gutter. */
 const SLOT = 84;
-/** Keyboard: use your item. */
-const ITEM_KEY = ['KeyD', 'ArrowLeft'] as const;
-const ITEM_KEY_LABEL = ['D', '←'] as const;
+const SLOT_GAP = 14;
+/** Keyboard: use the item in each slot (bottom slot first). */
+const ITEM_KEY = [
+  ['KeyD', 'KeyA'],
+  ['ArrowLeft', 'ArrowRight'],
+] as const;
+const ITEM_KEY_LABEL = [
+  ['D', 'A'],
+  ['←', '→'],
+] as const;
 const pc = (s: Side) => (s === 0 ? 1 : 2);
 
 const FONT = 'Futura, "Avenir Next", "Century Gothic", "Trebuchet MS", system-ui, sans-serif';
@@ -60,9 +71,23 @@ interface Popup {
 
 /** A power-up waiting on the court. t = seconds since it appeared. */
 interface PowerUp {
+  kind: 'grow' | 'bomb';
   x: number;
   y: number;
   t: number;
+}
+
+/** A bomb ball: winding up on its owner's paddle, then flying at the other player. */
+interface Bomb {
+  owner: Side;
+  ball: Ball;
+  charging: boolean;
+  /** Seconds since it started charging, or since launch. */
+  t: number;
+  /** Beep timer (beeps speed up as it closes in). */
+  beep: number;
+  trail: { x: number; y: number }[];
+  dead: boolean;
 }
 
 /** A chunk of an exploded paddle. */
@@ -108,12 +133,13 @@ export class SuperPong implements Game {
   private ballAngle = 0;
   private phys: PhysOptions = { spin: false };
   private items = new Inventory();
-  /** Centre of each player's item slot (world units). */
-  private slots: [{ x: number; y: number }, { x: number; y: number }] = [
-    { x: 0, y: 0 },
-    { x: 0, y: 0 },
-  ];
-  private slotFlash: [number, number] = [0, 0];
+  /** Centre of each player's item slots (world units), bottom slot first. */
+  private slots: { x: number; y: number }[][] = [[], []];
+  private slotFlash: number[][] = [new Array(ITEM_SLOTS).fill(0), new Array(ITEM_SLOTS).fill(0)];
+  private bombs: Bomb[] = [];
+  private bombEvents: BallEvent[] = [];
+  /** Bombs explode at the screen edges (inside the camera cutout). */
+  private bombField = { w: 0, h: WORLD_H, goalL: 0, goalR: 0 };
   /** Seconds of slowdown braking left. */
   private braking = 0;
   private offButton: () => void;
@@ -143,8 +169,8 @@ export class SuperPong implements Game {
   /** Who touched the ball last (they get any power-up it hits). */
   private lastHit: Side | -1 = -1;
   private popups: Popup[] = [];
-  /** The loser's paddle is blown apart by the winning goal (until the rematch). */
-  private destroyed: Side | -1 = -1;
+  /** Paddles blown apart (by a bomb until the next point, by the winning goal until the rematch). */
+  private broken: [boolean, boolean] = [false, false];
   private debris: Debris[] = [];
 
   private events: BallEvent[] = [];
@@ -157,11 +183,11 @@ export class SuperPong implements Game {
 
   constructor(private g: GameContext) {
     this.view = g.view;
-    const mk = (): PaddleState => ({ x: 0, y: WORLD_H / 2, w: PADDLE.w, h: PADDLE.h, vy: 0, squash: 0, squashV: 0, flash: 0 });
+    const mk = (): PaddleState => ({ x: 0, y: WORLD_H / 2, w: PADDLE.w, h: PADDLE.h, vy: 0, squash: 0, squashV: 0, flash: 0, holes: [], gone: false });
     this.paddles = [mk(), mk()];
     this.offButton = g.input.onButton((id) => {
-      if (id === 'item0') this.useItem(0);
-      else if (id === 'item1') this.useItem(1);
+      const m = /^item(\d)-(\d)$/.exec(id);
+      if (m) this.useItem(Number(m[1]) as Side, Number(m[2]));
     });
     this.resize(g.view);
     g.music.newMatch();
@@ -185,18 +211,23 @@ export class SuperPong implements Game {
     this.trail.length = 0;
     this.grid.resize(this.field.goalR - this.field.goalL, view.h, this.field.goalL);
     this.vignette = makeVignette(view.w, view.h);
-    // Item slots: bottom of each gutter, clear of the camera cutout and the home bar.
+    this.bombField = { w: view.w, h: view.h, goalL: inset, goalR: view.w - inset };
+    // Item slots: stacked at the bottom of each gutter, clear of the camera cutout and home bar.
     const sy = view.h - Math.max(view.inset.b, 0) - SLOT / 2 - 22;
-    this.slots[0] = { x: (inset + this.field.goalL) / 2, y: sy };
-    this.slots[1] = { x: (this.field.goalR + view.w - inset) / 2, y: sy };
+    const xs = [(inset + this.field.goalL) / 2, (this.field.goalR + view.w - inset) / 2];
+    for (const side of [0, 1] as const) {
+      this.slots[side] = Array.from({ length: ITEM_SLOTS }, (_, i) => ({ x: xs[side], y: sy - i * (SLOT + SLOT_GAP) }));
+    }
     this.g.input.setButtons(
-      this.slots.map((sl, i) => ({
-        id: `item${i}`,
-        x: (sl.x - SLOT / 2) * view.scale,
-        y: (sl.y - SLOT / 2) * view.scale,
-        w: SLOT * view.scale,
-        h: SLOT * view.scale,
-      })),
+      ([0, 1] as const).flatMap((side) =>
+        this.slots[side].map((sl, i) => ({
+          id: `item${side}-${i}`,
+          x: (sl.x - SLOT / 2) * view.scale,
+          y: (sl.y - SLOT / 2) * view.scale,
+          w: SLOT * view.scale,
+          h: SLOT * view.scale,
+        })),
+      ),
     );
   }
 
@@ -220,7 +251,8 @@ export class SuperPong implements Game {
       this.fizzlePower();
       this.g.music.newMatch();
       this.serveDir = this.winner === 0 ? 1 : -1;
-      this.rebuildPaddle();
+      this.clearBombs();
+      this.repairPaddles();
       this.enter('intro');
     } else if (this.phase === 'intro' && this.phaseT > 0.3) {
       this.enter('serve');
@@ -246,10 +278,12 @@ export class SuperPong implements Game {
         this.trail.length = 0;
         this.lastHit = -1;
         this.braking = 0;
+        this.clearBombs();
+        this.repairPaddles();
         this.schedule.startRally();
         // Everyone gets a slowdown each point (it doesn't stack).
         for (const side of [0, 1] as const) {
-          if (!this.items.has(side, 'slow') && this.items.give(side, 'slow')) this.slotFlash[side] = 0.6;
+          if (!this.items.has(side, 'slow') && this.items.give(side, 'slow')) this.flashSlotOf(side, 'slow', 0.6);
         }
         this.g.sfx.charge(SERVE_WINDUP);
         break;
@@ -289,8 +323,10 @@ export class SuperPong implements Game {
 
     this.phys.spin = this.g.settings.get('spin');
     for (const side of [0, 1] as const) {
-      if (this.g.input.consumeKey(ITEM_KEY[side])) this.useItem(side);
-      this.slotFlash[side] = Math.max(0, this.slotFlash[side] - dt * 2.5);
+      for (let i = 0; i < ITEM_SLOTS; i++) {
+        if (this.g.input.consumeKey(ITEM_KEY[side][i])) this.useItem(side, i);
+        this.slotFlash[side][i] = Math.max(0, this.slotFlash[side][i] - dt * 2.5);
+      }
     }
     this.updatePaddles(dt);
     this.phaseT += sdt;
@@ -307,6 +343,7 @@ export class SuperPong implements Game {
         break;
       }
       case 'play':
+        this.chargeBombs(sdt);
         this.simulate(sdt);
         this.embers(dt);
         break;
@@ -368,6 +405,7 @@ export class SuperPong implements Game {
       this.trail.push({ x: this.ball.x, y: this.ball.y });
       if (this.trail.length > TRAIL_LEN) this.trail.shift();
       for (const e of this.events) this.handle(e);
+      if (!goal && this.bombs.length) this.stepBombs();
       const pw = this.power;
       if (!goal && pw && pw.t > 0.15 && this.lastHit !== -1 && touches(this.ball, pw.x, pw.y)) this.collect(this.lastHit, pw);
       if (goal) {
@@ -450,7 +488,8 @@ export class SuperPong implements Game {
         sfx.warp(1, pan);
         this.g.music.sweep();
         buzz([45, 30, 80]);
-        if (this.score[s] >= WIN_SCORE) this.explodePaddle(s === 0 ? 1 : 0);
+        this.clearBombs();
+        if (this.score[s] >= WIN_SCORE) this.explodePaddle(s === 0 ? 1 : 0, true);
         this.enter('scored');
         break;
       }
@@ -460,13 +499,18 @@ export class SuperPong implements Game {
   // ---- power-ups -------------------------------------------------------------
 
   private spawnPower(): void {
-    // One at a time, and none once both paddles are full size.
-    if (this.power || Math.min(...this.grows) >= POWER.maxGrows) return;
+    if (this.power) return; // one at a time
+    // About a third are bomb balls (if they're switched on); growers stop once both paddles are full.
+    const bombsOn = this.g.settings.get('bombPickups');
+    const growFull = Math.min(...this.grows) >= POWER.maxGrows;
+    if (growFull && !bombsOn) return;
+    const kind = bombsOn && (growFull || Math.random() < 0.35) ? 'bomb' : 'grow';
     const { x, y } = spawnPoint(this.field, this.ball);
-    this.power = { x, y, t: 0 };
+    this.power = { kind, x, y, t: 0 };
     const pan = (x / this.field.w) * 2 - 1;
-    this.rings.push({ x, y, t: 0, dur: 0.45, maxR: 120, color: COLOR.gold, width: 3 });
-    this.particles.burst(x, y, { count: 24, color: [GOLD, WHITE], speed: [120, 420], life: [0.2, 0.5], drag: 4 });
+    const col = kind === 'bomb' ? BOMB.color : COLOR.gold;
+    this.rings.push({ x, y, t: 0, dur: 0.45, maxR: 120, color: col, width: 3 });
+    this.particles.burst(x, y, { count: 24, color: [kind === 'bomb' ? RED : GOLD, WHITE], speed: [120, 420], life: [0.2, 0.5], drag: 4 });
     this.grid.impulse(x, y, 260, 200);
     this.g.sfx.powerSpawn(pan);
     this.g.sfx.warp(0.08, pan);
@@ -475,8 +519,11 @@ export class SuperPong implements Game {
   /** Power-up kinds the Debug screen can set, with the most a player can hold. */
   readonly powerUps = [
     { id: 'grow', name: 'Paddle grower', max: POWER.maxGrows },
-    { id: 'slow', name: 'Slowdown', max: ITEM_SLOTS },
+    { id: 'slow', name: 'Slowdown', max: ITEM_SLOTS, slot: true },
+    { id: 'bomb', name: 'Bomb ball', max: ITEM_SLOTS, slot: true },
   ];
+  /** Item slots each player has (slot power-ups share them). */
+  readonly itemSlots = ITEM_SLOTS;
 
   powerUpCount(side: Side, id: string): number {
     if (id === 'grow') return this.grows[side];
@@ -499,12 +546,16 @@ export class SuperPong implements Game {
       return;
     }
     const item = id as ItemId;
-    while (this.powerUpCount(side, id) < target && this.items.give(side, item)) this.slotFlash[side] = 1;
+    while (this.powerUpCount(side, id) < target && this.items.give(side, item)) this.flashSlotOf(side, item, 1);
     while (this.powerUpCount(side, id) > target) this.items.take(side, this.items.slots[side].indexOf(item));
   }
 
   private collect(side: Side, pw: PowerUp): void {
     this.power = null;
+    if (pw.kind === 'bomb') {
+      this.pickUpItem(side, 'bomb', pw.x, pw.y);
+      return;
+    }
     if (this.grows[side] < POWER.maxGrows) {
       this.grow(side, pw.x, pw.y, true);
       return;
@@ -563,16 +614,224 @@ export class SuperPong implements Game {
   // ---- items -----------------------------------------------------------------
 
   /** Fire the item in a player's slot. Only while the ball is live; otherwise they keep it. */
-  private useItem(side: Side): void {
+  private useItem(side: Side, slot: number): void {
     if (this.phase !== 'play') return;
-    const item = this.items.take(side);
+    const item = this.items.slots[side][slot];
     if (!item) return;
-    this.slotFlash[side] = 1;
-    if (item === 'slow') this.slowdown(side);
+    if (item === 'bomb' && this.broken[side]) return; // nothing to launch it from
+    this.items.take(side, slot);
+    this.slotFlash[side][slot] = 1;
+    if (item === 'slow') this.slowdown(side, slot);
+    else if (item === 'bomb') this.startBomb(side);
+  }
+
+  /** Flash whichever slot holds this item (after it was given). */
+  private flashSlotOf(side: Side, item: ItemId, amount: number): void {
+    const i = this.items.slots[side].lastIndexOf(item);
+    if (i >= 0) this.slotFlash[side][i] = amount;
+  }
+
+  /** The ball picked up an item: it goes in the player's first free slot (if they have one). */
+  private pickUpItem(side: Side, item: ItemId, x: number, y: number): void {
+    const col = ITEMS[item].color;
+    const pan = (x / this.field.w) * 2 - 1;
+    if (!this.items.give(side, item)) {
+      this.particles.burst(x, y, { count: 30, color: [RED, WHITE], speed: [100, 500], life: [0.2, 0.5], drag: 3 });
+      this.popups.push({ x, y: y - 60, t: 0, text: 'SLOTS FULL', color: COLOR.player[side] });
+      this.g.sfx.powerUp(pan, true);
+      return;
+    }
+    this.flashSlotOf(side, item, 1);
+    const sl = this.slots[side][this.items.slots[side].lastIndexOf(item)];
+    this.particles.burst(x, y, { count: 80, color: [RED, RED, FIRE, WHITE], speed: [150, 850], life: [0.3, 0.8], drag: 2.5 });
+    for (let i = 0; i < 26; i++) {
+      const life = 0.3 + Math.random() * 0.25;
+      const sx = x + (Math.random() - 0.5) * 40;
+      const sy = y + (Math.random() - 0.5) * 40;
+      this.particles.spawn(sx, sy, (sl.x - sx) / life, (sl.y - sy) / life, life, 3, Math.random() < 0.5 ? RED : FIRE, Kind.Streak, 0);
+    }
+    this.rings.push({ x, y, t: 0, dur: 0.4, maxR: 220, color: col, width: 5 });
+    this.popups.push({ x, y: y - 60, t: 0, text: ITEMS[item].name.toUpperCase(), color: col });
+    this.grid.impulse(x, y, 700, 300);
+    this.shake.add(0.3);
+    this.g.sfx.powerUp(pan, false);
+    this.g.sfx.warp(0.25, pan);
+    buzz(30);
+  }
+
+  // ---- bomb ball -------------------------------------------------------------
+
+  /** Where a bomb sits while it winds up: just off the front of its owner's paddle. */
+  private bombDock(side: Side): { x: number; y: number } {
+    const p = this.paddles[side];
+    return { x: p.x + (side === 0 ? 1 : -1) * (p.w / 2 + BOMB.r + 8), y: p.y };
+  }
+
+  private startBomb(side: Side): void {
+    const { x, y } = this.bombDock(side);
+    this.bombs.push({ owner: side, ball: { x, y, vx: 0, vy: 0, r: BOMB.r, spin: 0 }, charging: true, t: 0, beep: 0, trail: [], dead: false });
+    this.g.sfx.charge(BOMB.charge);
+  }
+
+  /** Charging bombs ride on their paddle, sucking in sparks, then launch. */
+  private chargeBombs(dt: number): void {
+    for (const b of this.bombs) {
+      if (!b.charging) continue;
+      if (this.broken[b.owner]) {
+        b.dead = true;
+        continue;
+      }
+      b.t += dt;
+      const { x, y } = this.bombDock(b.owner);
+      b.ball.x = x;
+      b.ball.y = y;
+      const n = Math.ceil(dt * 200);
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = 90 + Math.random() * 90;
+        const life = 0.2 + Math.random() * 0.12;
+        this.particles.spawn(x + Math.cos(a) * d, y + Math.sin(a) * d, (-Math.cos(a) * d) / life, (-Math.sin(a) * d) / life, life, 3, Math.random() < 0.5 ? RED : FIRE, Kind.Streak, 0);
+      }
+      if (b.t >= BOMB.charge) this.launchBomb(b);
+    }
+    this.bombs = this.bombs.filter((b) => !b.dead);
+  }
+
+  /** Off it goes at serve speed, carrying the paddle's movement (and spin, if that's on). */
+  private launchBomb(b: Bomb): void {
+    const side = b.owner;
+    const p = this.paddles[side];
+    const dir = side === 0 ? 1 : -1;
+    const v = launchVelocity(dir, p.vy);
+    b.charging = false;
+    b.t = 0;
+    b.ball.vx = v.vx;
+    b.ball.vy = v.vy;
+    b.ball.spin = this.phys.spin ? clamp(p.vy * PHYS.spinPerPaddleSpeed, -PHYS.maxSpin, PHYS.maxSpin) * dir : 0;
+    const { x, y } = b.ball;
+    const pan = (x / this.field.w) * 2 - 1;
+    this.rings.push({ x, y, t: 0, dur: 0.35, maxR: 130, color: BOMB.color, width: 4 });
+    this.particles.burst(x, y, { count: 40, color: [RED, FIRE, WHITE], speed: [200, 700], angle: dir > 0 ? 0 : Math.PI, spread: 1.6, life: [0.2, 0.5], drag: 3 });
+    this.grid.impulse(x, y, 500, 240);
+    this.shake.add(0.25);
+    p.squashV = -12;
+    p.flash = 1;
+    this.g.sfx.serve();
+    this.g.sfx.warp(0.3, pan);
+  }
+
+  /** One physics step for flying bombs (runs alongside the ball). */
+  private stepBombs(): void {
+    for (const b of this.bombs) {
+      if (b.charging || b.dead) continue;
+      b.t += STEP;
+      this.bombEvents.length = 0;
+      const landed = stepBall(b.ball, this.paddles, this.bombField, STEP, this.bombEvents, this.phys);
+      b.trail.push({ x: b.ball.x, y: b.ball.y });
+      if (b.trail.length > 24) b.trail.shift();
+      for (const e of this.bombEvents) {
+        if (e.type === 'paddle') this.bombBlocked(b, e.side, e.x, e.y);
+        else if (e.type === 'wall') {
+          this.particles.burst(e.x, e.y, { count: 10, color: [RED, FIRE], speed: [150, 450], angle: e.top ? Math.PI / 2 : -Math.PI / 2, spread: 2.4, life: [0.1, 0.3], drag: 5 });
+          this.g.sfx.wall((e.x / this.field.w) * 2 - 1);
+        }
+      }
+      if (!b.dead && (landed || b.t > BOMB.maxLife)) {
+        const x = clamp(b.ball.x, this.bombField.goalL, this.bombField.goalR);
+        this.bombBlast(b, x, b.ball.y);
+      }
+      // Beeps speed up as it closes in on the far edge.
+      const target = b.owner === 0 ? this.bombField.goalR : this.bombField.goalL;
+      const close = 1 - clamp(Math.abs(target - b.ball.x) / (this.bombField.goalR - this.bombField.goalL), 0, 1);
+      b.beep += STEP * (2.5 + close * close * 12);
+      if (b.beep >= 1 && !b.dead) {
+        b.beep -= 1;
+        this.g.sfx.bombTick((b.ball.x / this.field.w) * 2 - 1);
+      }
+    }
+    this.bombs = this.bombs.filter((b) => !b.dead);
+  }
+
+  /** Blocked it: the bomb goes off on the paddle, and the paddle goes with it. */
+  private bombBlocked(b: Bomb, side: Side, x: number, y: number): void {
+    b.dead = true;
+    this.bombFlash(x, y, 0.7);
+    this.explodePaddle(side, false);
+  }
+
+  /** Dodged it: it explodes where it hits the back edge, holing (or destroying) paddles in reach. */
+  private bombBlast(b: Bomb, x: number, y: number): void {
+    b.dead = true;
+    this.bombFlash(x, y, 1);
+    this.rings.push({ x, y, t: 0, dur: 0.45, maxR: BOMB.blast, color: FIRE_COLOR, width: 10 });
+    for (const side of [0, 1] as const) {
+      if (this.broken[side]) continue;
+      const p = this.paddles[side];
+      const hit = blastPaddle(p, x, y, BOMB.blast);
+      if (hit.core) this.explodePaddle(side, false);
+      else if (hit.hole) this.blastHole(side, hit.hole.lo, hit.hole.hi);
+    }
+  }
+
+  /** The fireball itself (shared by blocked and dodged bombs). */
+  private bombFlash(x: number, y: number, size: number): void {
+    const pan = (x / this.field.w) * 2 - 1;
+    this.particles.burst(x, y, { count: (260 * size) | 0, color: [RED, FIRE, FIRE, WHITE, GOLD], speed: [150, 1500 * size], life: [0.4, 1.3], drag: 1.8 });
+    this.particles.burst(x, y, { count: (60 * size) | 0, color: [FIRE, RED, WHITE], kind: Kind.Dot, speed: [60, 700], life: [0.5, 1.4], size: [24, 70], drag: 2, gravity: -120 });
+    this.rings.push(
+      { x, y, t: 0, dur: 0.35, maxR: 260 * size, color: COLOR.white, width: 10 },
+      { x, y, t: -0.06, dur: 0.8, maxR: 700 * size, color: BOMB.color, width: 5 },
+    );
+    this.grid.impulse(x, y, 3200 * size, 600);
+    this.shake.add(0.8 * size);
+    this.flash = Math.max(this.flash, 0.35 * size);
+    this.flashColor = BOMB.color;
+    this.hitstop = Math.max(this.hitstop, 0.06);
+    this.g.sfx.blast(pan);
+    this.g.sfx.warp(0.8 * size, pan);
+    buzz([50, 30, 70]);
+  }
+
+  /** Cut a hole in a paddle (paddle-local lo..hi), with chunks of it flying off. */
+  private blastHole(side: Side, lo: number, hi: number): void {
+    const p = this.paddles[side];
+    addHole(p.holes!, { lo, hi });
+    const away = side === 0 ? 1 : -1;
+    const chunks = Math.max(1, Math.round((hi - lo) / 22));
+    for (let i = 0; i < chunks; i++) {
+      const y = p.y + lo + ((hi - lo) * (i + 0.5)) / chunks;
+      this.debris.push({
+        x: p.x,
+        y,
+        vx: away * (300 + Math.random() * 700),
+        vy: (Math.random() - 0.6) * 900,
+        a: 0,
+        va: (Math.random() - 0.5) * 20,
+        w: p.w * 0.7,
+        h: ((hi - lo) / chunks) * 0.8,
+        t: 0,
+        life: 1.6 + Math.random() * 0.8,
+        color: COLOR.player[side],
+      });
+    }
+    for (const edge of [lo, hi]) {
+      if (Math.abs(edge) < p.h / 2 - 1) this.particles.burst(p.x, p.y + edge, { count: 16, color: [FIRE, WHITE, pc(side)], speed: [100, 500], life: [0.2, 0.6], drag: 3 });
+    }
+    p.flash = 1;
+    p.squashV = 12;
+  }
+
+  /** The point is over: charging bombs are refunded, flying ones fizzle. */
+  private clearBombs(): void {
+    for (const b of this.bombs) {
+      if (b.charging) this.items.give(b.owner, 'bomb');
+      else this.particles.burst(b.ball.x, b.ball.y, { count: 20, color: [RED, WHITE], speed: [60, 300], life: [0.2, 0.5], drag: 4 });
+    }
+    this.bombs.length = 0;
   }
 
   /** Brake the ball back to serve speed: a time-freeze ripple, ice sparks, a tape-stop dive. */
-  private slowdown(side: Side): void {
+  private slowdown(side: Side, slot: number): void {
     this.braking = SLOW.duration;
     this.timeScale = 0.35;
     const { x, y } = this.ball;
@@ -585,7 +844,7 @@ export class SuperPong implements Game {
     );
     this.particles.burst(x, y, { count: 70, color: [ICE, ICE, WHITE], speed: [100, 700], life: [0.4, 1.0], drag: 5 });
     // Frost streams from the slot that fired it to the ball.
-    const sl = this.slots[side];
+    const sl = this.slots[side][slot];
     for (let i = 0; i < 24; i++) {
       const life = 0.25 + Math.random() * 0.2;
       const tx = x + (Math.random() - 0.5) * 30;
@@ -607,21 +866,26 @@ export class SuperPong implements Game {
     const pw = this.power;
     if (!pw) return;
     this.power = null;
-    this.particles.burst(pw.x, pw.y, { count: 18, color: [GOLD, WHITE], speed: [60, 260], life: [0.2, 0.45], drag: 4 });
+    this.particles.burst(pw.x, pw.y, { count: 18, color: [pw.kind === 'bomb' ? RED : GOLD, WHITE], speed: [60, 260], life: [0.2, 0.45], drag: 4 });
   }
 
   // ---- match point --------------------------------------------------------------
 
-  /** The winning goal blows the loser's paddle apart: chunks, fire, a shockwave across the court. */
-  private explodePaddle(side: Side): void {
+  /**
+   * Blow a paddle apart: chunks, fire, a shockwave. `big` is the winning goal (the whole court
+   * shakes and time nearly stops); a bomb kill is a little smaller.
+   */
+  private explodePaddle(side: Side, big: boolean): void {
     const p = this.paddles[side];
     const col = COLOR.player[side];
     const ci = pc(side);
     const away = side === 0 ? 1 : -1; // toward the middle of the court
-    this.destroyed = side;
+    const already = this.broken[side];
+    this.broken[side] = true;
+    p.gone = true;
     // Chunks: the paddle sliced along its length, flung toward mid-court, tumbling under gravity.
-    const n = 12;
-    const ph = p.h / n;
+    const n = already ? 0 : 12;
+    const ph = p.h / 12;
     for (let i = 0; i < n; i++) {
       const y = p.y - p.h / 2 + ph * (i + 0.5);
       const spread = (y - p.y) / (p.h / 2); // -1 top .. 1 bottom
@@ -644,28 +908,38 @@ export class SuperPong implements Game {
     this.particles.burst(p.x, p.y, { count: 120, color: [ci, WHITE, GOLD], kind: Kind.Dot, speed: [60, 1100], life: [0.8, 2.2], size: [24, 80], drag: 1.8, gravity: 200 });
     this.rings.push(
       { x: p.x, y: p.y, t: -0.05, dur: 0.5, maxR: 500, color: COLOR.white, width: 14 },
-      { x: p.x, y: p.y, t: -0.12, dur: 1.0, maxR: 1300, color: col, width: 8 },
-      { x: p.x, y: p.y, t: -0.25, dur: 1.5, maxR: 2400, color: COLOR.gold, width: 4 },
+      { x: p.x, y: p.y, t: -0.12, dur: 1.0, maxR: big ? 1300 : 900, color: col, width: 8 },
     );
-    this.grid.impulse(p.x, p.y, 5000, 1100);
-    this.shake.add(1.6);
-    this.flash = 0.9;
+    if (big) this.rings.push({ x: p.x, y: p.y, t: -0.25, dur: 1.5, maxR: 2400, color: COLOR.gold, width: 4 });
+    this.grid.impulse(p.x, p.y, big ? 5000 : 3500, big ? 1100 : 800);
+    this.shake.add(big ? 1.6 : 1.1);
+    this.flash = big ? 0.9 : 0.6;
     this.flashColor = COLOR.white;
-    this.hitstop = 0.22;
-    this.timeScale = 0.12;
+    this.hitstop = big ? 0.22 : 0.12;
+    this.timeScale = big ? 0.12 : 0.3;
     const pan = (p.x / this.field.w) * 2 - 1;
     this.g.sfx.explode(pan);
     this.g.sfx.warp(1, pan);
     buzz([80, 40, 160]);
   }
 
-  /** Rematch: the shattered paddle reforms, sparks rushing back together. */
-  private rebuildPaddle(): void {
-    const side = this.destroyed;
-    if (side === -1) return;
-    this.destroyed = -1;
-    this.debris.length = 0;
+  /** New point (or rematch): blown-up paddles reform, sparks rushing back together; holes heal. */
+  private repairPaddles(): void {
+    for (const side of [0, 1] as const) {
+      const p = this.paddles[side];
+      if (p.holes!.length && !this.broken[side]) {
+        for (const h of p.holes!) this.particles.burst(p.x, p.y + (h.lo + h.hi) / 2, { count: 14, color: [pc(side), WHITE], speed: [40, 200], life: [0.2, 0.4], drag: 4 });
+        p.flash = 0.6;
+      }
+      p.holes!.length = 0;
+      if (this.broken[side]) this.rebuildPaddle(side);
+    }
+  }
+
+  private rebuildPaddle(side: Side): void {
+    this.broken[side] = false;
     const p = this.paddles[side];
+    p.gone = false;
     for (let i = 0; i < 70; i++) {
       const a = Math.random() * Math.PI * 2;
       const d = 120 + Math.random() * 200;
@@ -780,6 +1054,7 @@ export class SuperPong implements Game {
     this.drawPower(ctx);
     this.drawDebris(ctx);
     this.drawPaddles(ctx);
+    this.drawBombs(ctx);
     if (this.ballVisible) this.drawBall(ctx);
     this.drawPopups(ctx);
     this.drawText(ctx);
@@ -796,32 +1071,51 @@ export class SuperPong implements Game {
     ctx.globalCompositeOperation = 'source-over';
   }
 
-  /** Each player's item slot: an outlined box in their colour, the item's icon when it holds one. */
+  /** Each player's item slots: outlined boxes in their colour, with the item's icon when full. */
   private drawSlots(ctx: CanvasRenderingContext2D): void {
     for (const side of [0, 1] as const) {
-      const { x, y } = this.slots[side];
-      const item = this.items.slots[side][0];
       const col = COLOR.player[side];
-      const pressed = this.g.input.isButtonDown(`item${side}`);
-      const f = this.slotFlash[side];
-      const half = (SLOT / 2) * (pressed ? 0.92 : 1) * (1 + f * 0.12);
-      if (f > 0) drawGlow(ctx, item ? ITEMS[item].color : col, x, y, SLOT * 2.2, f * 0.6);
-      ctx.beginPath();
-      ctx.roundRect(x - half, y - half, half * 2, half * 2, 16);
-      if (item) {
-        ctx.fillStyle = rgba(ITEMS[item].color, 0.07 + 0.04 * Math.sin(this.time * 4));
-        ctx.fill();
-      }
-      glowStroke(ctx, col, 2.5, item ? 0.7 : 0.22);
-      if (item === 'slow') this.drawHourglass(ctx, x, y - (this.coarse ? 0 : 6), half * 0.42, ITEMS.slow.color);
-      if (!this.coarse) {
-        ctx.font = `600 20px ${FONT}`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = rgba(col, item ? 0.75 : 0.3);
-        ctx.fillText(ITEM_KEY_LABEL[side], x, y + half - 15);
+      for (let i = 0; i < ITEM_SLOTS; i++) {
+        const { x, y } = this.slots[side][i];
+        const item = this.items.slots[side][i];
+        const pressed = this.g.input.isButtonDown(`item${side}-${i}`);
+        const f = this.slotFlash[side][i];
+        const half = (SLOT / 2) * (pressed ? 0.92 : 1) * (1 + f * 0.12);
+        if (f > 0) drawGlow(ctx, item ? ITEMS[item].color : col, x, y, SLOT * 2.2, f * 0.6);
+        ctx.beginPath();
+        ctx.roundRect(x - half, y - half, half * 2, half * 2, 16);
+        if (item) {
+          ctx.fillStyle = rgba(ITEMS[item].color, 0.07 + 0.04 * Math.sin(this.time * 4));
+          ctx.fill();
+        }
+        glowStroke(ctx, col, 2.5, item ? 0.7 : 0.22);
+        const iy = y - (this.coarse ? 0 : 6);
+        if (item === 'slow') this.drawHourglass(ctx, x, iy, half * 0.42, ITEMS.slow.color);
+        else if (item === 'bomb') this.drawBombIcon(ctx, x, iy, half * 0.36);
+        if (!this.coarse) {
+          ctx.font = `600 20px ${FONT}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = rgba(col, item ? 0.75 : 0.3);
+          ctx.fillText(ITEM_KEY_LABEL[side][i], x, y + half - 15);
+        }
       }
     }
+  }
+
+  /** A round bomb with a cap and a fuse curling over the top to a fizzing spark. */
+  private drawBombIcon(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 9);
+    const cy = y + r * 0.3;
+    ctx.beginPath();
+    ctx.arc(x, cy, r, 0, Math.PI * 2);
+    ctx.rect(x - r * 0.32, cy - r * 1.32, r * 0.64, r * 0.34);
+    glowStroke(ctx, BOMB.color, 2.6, 0.95);
+    ctx.beginPath();
+    ctx.moveTo(x, cy - r * 1.32);
+    ctx.bezierCurveTo(x, cy - r * 1.9, x - r * 0.9, cy - r * 1.9, x - r * 0.75, cy - r * 1.45);
+    glowStroke(ctx, '#ffffff', 2, 0.8);
+    drawGlow(ctx, '#ff9a3b', x - r * 0.75, cy - r * 1.45, r * 1.4, 0.5 + pulse * 0.5);
   }
 
   private drawHourglass(ctx: CanvasRenderingContext2D, x: number, y: number, a: number, color: string): void {
@@ -896,8 +1190,9 @@ export class SuperPong implements Game {
     const x = pw.x;
     const y = pw.y + Math.sin(this.time * 3) * 6;
     const pulse = 1 + 0.12 * Math.sin(this.time * 7);
-    drawGlow(ctx, COLOR.gold, x, y, r * 6 * pulse, 0.32);
-    drawGlow(ctx, COLOR.gold, x, y, r * 2.4, 0.5);
+    const col = pw.kind === 'bomb' ? BOMB.color : COLOR.gold;
+    drawGlow(ctx, col, x, y, r * 6 * pulse, 0.32);
+    drawGlow(ctx, col, x, y, r * 2.4, 0.5);
     // Two counter-rotating diamonds.
     for (const [spin, k, a] of [[1.3, 1, 0.95], [-0.8, 1.3, 0.35]]) {
       const rr = r * k;
@@ -911,7 +1206,11 @@ export class SuperPong implements Game {
         else ctx.lineTo(px, py);
       }
       ctx.closePath();
-      glowStroke(ctx, COLOR.gold, 3.2, a);
+      glowStroke(ctx, col, 3.2, a);
+    }
+    if (pw.kind === 'bomb') {
+      this.drawBombIcon(ctx, x, y - r * 0.05, r * 0.42);
+      return;
     }
     // Icon: a vertical double arrow — "taller paddle".
     const a = r * 0.55;
@@ -968,12 +1267,13 @@ export class SuperPong implements Game {
 
   /**
    * The paddle's own length plus one segment at each end per paddle grower collected, all in the
-   * player's colour, so the size shows on the paddle itself. The fifth fuses it into one solid
-   * paddle that pulses.
+   * player's colour, so the size shows on the paddle itself; the fifth fuses it into one solid
+   * paddle that pulses. Bomb holes are cut out, their edges glowing. The core — a bomb blast there
+   * destroys the paddle — is wider and white-hot.
    */
   private drawPaddles(ctx: CanvasRenderingContext2D): void {
     for (const side of [0, 1] as const) {
-      if (side === this.destroyed) continue;
+      if (this.broken[side]) continue;
       const p = this.paddles[side];
       const col = COLOR.player[side];
       const sx = Math.max(0.5, 1 + 0.9 * p.squash);
@@ -986,21 +1286,64 @@ export class SuperPong implements Game {
       drawGlow(ctx, col, p.x, p.y, p.h * 1.5, 0.1 + p.flash * 0.35 + touch * 0.3 + pulse);
       const coreCol = p.flash > 0 ? whiten(col, p.flash * 0.7) : col;
       const bright = 0.85 + p.flash * 0.5 + touch + pulse;
+      // Pieces in paddle-local y: [lo, hi, newest-segment glow].
       const ext = p.h - PADDLE.h; // grows (and shrinks back) smoothly
       const segs = fused ? 0 : Math.max(n, ext > 1 ? 1 : 0);
-      if (segs === 0) {
-        glowRect(ctx, p.x, p.y, w, p.h * sy, coreCol, bright);
-        continue;
+      const pieces: [number, number, number][] = [];
+      if (segs === 0) pieces.push([-p.h / 2, p.h / 2, 0]);
+      else {
+        pieces.push([-PADDLE.h / 2, PADDLE.h / 2, 0]);
+        const seg = ext / 2 / segs;
+        const gap = Math.min(6, seg * 0.35);
+        for (let i = 0; i < segs; i++) {
+          const newest = i === n - 1 ? Math.exp(-4 * this.growT[side]) : 0;
+          const a = PADDLE.h / 2 + seg * i + gap / 2;
+          const b = PADDLE.h / 2 + seg * (i + 1) - gap / 2;
+          pieces.push([a, b, newest], [-b, -a, newest]);
+        }
       }
-      glowRect(ctx, p.x, p.y, w, PADDLE.h * sy, coreCol, bright);
-      const seg = ext / 2 / segs;
-      const gap = Math.min(6, seg * 0.35);
-      for (let i = 0; i < segs; i++) {
-        const newest = i === n - 1 ? Math.exp(-4 * this.growT[side]) : 0;
-        const off = (PADDLE.h / 2 + seg * (i + 0.5) + gap / 4) * sy;
-        const len = Math.max(0, (seg - gap) * sy);
-        for (const dir of [-1, 1]) glowRect(ctx, p.x, p.y + dir * off, w, len, whiten(coreCol, newest * 0.6), bright * 0.85 + newest);
+      for (const [lo, hi, newest] of pieces) {
+        for (const [a, b] of solidPieces(lo, hi, p.holes!)) {
+          if (b - a < 1) continue;
+          glowRect(ctx, p.x, p.y + ((a + b) / 2) * sy, w, (b - a) * sy, whiten(coreCol, newest * 0.6), (newest ? bright * 0.85 : bright) + newest);
+        }
       }
+      // Holes: glowing, burning edges.
+      for (const h of p.holes!) {
+        for (const edge of [h.lo, h.hi]) {
+          if (Math.abs(edge) < p.h / 2 - 1) drawGlow(ctx, '#ff9a3b', p.x, p.y + edge * sy, 46, 0.55 + 0.15 * Math.sin(this.time * 14 + edge));
+        }
+      }
+      // The core: a wider, white-hot band in the middle.
+      glowRect(ctx, p.x, p.y, w * 1.5, BOMB.core * sy, whiten(coreCol, 0.55), bright * 1.05);
+    }
+  }
+
+  private drawBombs(ctx: CanvasRenderingContext2D): void {
+    for (const b of this.bombs) {
+      const { x, y } = b.ball;
+      const grow = b.charging ? easeOutBack(Math.min(1, b.t / (BOMB.charge * 0.8))) : 1;
+      const r = BOMB.r * grow;
+      if (r <= 0.3) continue;
+      // Faster, harder pulsing the closer it is to going off.
+      const rate = b.charging ? 10 : 8 + b.t * 6;
+      const pulse = 0.5 + 0.5 * Math.sin(this.time * rate);
+      if (b.trail.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(b.trail[0].x, b.trail[0].y);
+        for (const t of b.trail) ctx.lineTo(t.x, t.y);
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = rgba(BOMB.color, 0.35);
+        ctx.lineWidth = r * 1.6;
+        ctx.stroke();
+      }
+      drawGlow(ctx, BOMB.color, x, y, r * (13 + pulse * 7), 0.7 + pulse * 0.3);
+      drawGlow(ctx, BOMB.color, x, y, r * 5, 1);
+      drawGlow(ctx, '#ff9a3b', x, y, r * 3, 0.6 + pulse * 0.4);
+      ctx.fillStyle = pulse > 0.6 ? '#ffffff' : '#ff6a5a';
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 

@@ -27,10 +27,14 @@ every push to `main` (it runs `npm test` and `npm run build` first).
   paddle growth). Every rally gets one 2–6 paddle hits in, then every 7–12. Power-ups go to whoever
   touched the ball last and stay on court between points (cleared on a new match). Growth lasts the
   whole match and shows as extra segments on the paddle ends; the fifth fuses them into one paddle.
-- `src/games/super-pong/items.ts` — usable items held in a slot at the bottom of each gutter, fired by
-  tapping the slot (an `input.setButtons` button, so it never moves a paddle) or a key (D / ←).
-  First item: Slowdown, which brakes the ball back to serve speed. For now everyone gets one each
-  point; it isn't spawned on court yet.
+- `src/games/super-pong/items.ts` — usable items held in two slots stacked at the bottom of each
+  gutter, fired by tapping the slot (an `input.setButtons` button, so it never moves a paddle) or a
+  key (D / A for cyan, ← / → for magenta). Slowdown brakes the ball back to serve speed; everyone
+  gets one each point. Bomb balls are picked up on court (about 1 in 3 power-ups).
+- `src/games/super-pong/bombs.ts` — pure, tested bomb-ball rules: launch velocity, blast holes, the
+  paddle core (a blast there, or blocking the bomb, blows the paddle up), solid pieces. Holes and
+  blown-up paddles are repaired at the next serve. Physics lets balls through holes (`throughHole`)
+  and past gone paddles.
 - `src/engine/settings.ts` — toggles on the Debug screen (menu and pause). Add an entry to `SETTINGS`
   and read it with `ctx.settings.get(id)`; the panel builds itself. The Debug screen also sets
   power-up counts (starting from what each player holds, capped at each kind's max) for a game that

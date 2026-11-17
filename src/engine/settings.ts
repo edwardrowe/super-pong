@@ -13,6 +13,7 @@ export interface SettingDef {
 
 export const SETTINGS: SettingDef[] = [
   { id: 'spin', label: 'Spin', hint: 'Moving your paddle as you hit puts spin on the ball, so it curves.', default: true },
+  { id: 'bombPickups', label: 'Bomb pickups', hint: 'Bomb balls can appear on court (about 1 in 3 power-ups).', default: true },
 ];
 
 const KEY = 'settings';

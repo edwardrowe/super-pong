@@ -6,14 +6,15 @@
 import type { Side } from '../../engine/types';
 import { PHYS } from './physics';
 
-export type ItemId = 'slow';
+export type ItemId = 'slow' | 'bomb';
 
 export const ITEMS: Record<ItemId, { name: string; color: string }> = {
   slow: { name: 'Slowdown', color: '#8fdcff' },
+  bomb: { name: 'Bomb ball', color: '#ff3b3b' },
 };
 
 /** Slots per player. */
-export const ITEM_SLOTS = 1;
+export const ITEM_SLOTS = 2;
 
 /** Slowdown: brake the ball back to serve speed over a moment. */
 export const SLOW = {

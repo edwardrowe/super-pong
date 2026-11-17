@@ -288,6 +288,10 @@ export class Shell {
     head.className = 'award head';
     head.innerHTML = '<span>Power-ups</span><span class="p0">Cyan</span><span class="p1">Magenta</span>';
     box.appendChild(head);
+    // Kinds that use item slots share them: + stops once a player's slots are all spoken for.
+    const value = (id: string, side: 0 | 1) => this.pendingAwards.get(`${id}:${side}`) ?? game.powerUpCount!(side, id);
+    const slotsUsed = (side: 0 | 1) => kinds.filter((k) => k.slot).reduce((n, k) => n + value(k.id, side), 0);
+    const refreshers: (() => void)[] = [];
     for (const kind of kinds) {
       const row = document.createElement('div');
       row.className = 'award';
@@ -302,18 +306,20 @@ export class Shell {
         step.innerHTML = '<button aria-label="One fewer">−</button><output></output><button aria-label="One more">+</button>';
         const [minus, plus] = step.querySelectorAll('button');
         const out = step.querySelector('output')!;
-        const show = (n: number) => {
+        const show = () => {
+          const n = value(kind.id, side);
           out.textContent = String(n);
           out.classList.toggle('changed', n !== now);
           minus.disabled = n <= 0;
-          plus.disabled = n >= kind.max;
+          plus.disabled = n >= kind.max || (!!kind.slot && slotsUsed(side) >= (game.itemSlots ?? Infinity));
         };
-        show(now);
+        refreshers.push(show);
+        show();
         const change = (d: number) => {
-          const n = Math.max(0, Math.min(kind.max, (this.pendingAwards.get(key) ?? now) + d));
+          const n = Math.max(0, Math.min(kind.max, value(kind.id, side) + d));
           if (n === now) this.pendingAwards.delete(key);
           else this.pendingAwards.set(key, n);
-          show(n);
+          for (const r of refreshers) r();
           this.sfx.click();
         };
         minus.addEventListener('click', () => change(-1));
@@ -327,10 +333,13 @@ export class Shell {
   /** Apply the held settings and queued awards, then close. */
   private saveDebug(): void {
     for (const [id, v] of this.pendingSettings) this.settings.set(id, v);
-    for (const [key, n] of this.pendingAwards) {
+    // Removals first, so freed item slots are there for additions.
+    const changes = [...this.pendingAwards].map(([key, n]) => {
       const [id, side] = key.split(':');
-      this.game?.setPowerUps?.(Number(side) as 0 | 1, id, n);
-    }
+      return { id, side: Number(side) as 0 | 1, n, less: n < (this.game?.powerUpCount?.(Number(side) as 0 | 1, id) ?? 0) };
+    });
+    changes.sort((a, b) => Number(b.less) - Number(a.less));
+    for (const c of changes) this.game?.setPowerUps?.(c.side, c.id, c.n);
     this.pendingSettings.clear();
     this.pendingAwards.clear();
     this.closePanel();

@@ -10,6 +10,12 @@ export interface Ball {
   spin?: number;
 }
 
+/** A gap blasted in a paddle, in paddle-local y (0 = the paddle's centre). */
+export interface Hole {
+  lo: number;
+  hi: number;
+}
+
 export interface Paddle {
   /** Centre. */
   x: number;
@@ -18,6 +24,25 @@ export interface Paddle {
   h: number;
   /** Vertical velocity, world units / s (adds a little spin to the bounce). */
   vy: number;
+  /** Gaps the ball passes straight through. */
+  holes?: Hole[];
+  /** Blown up: nothing to hit at all. */
+  gone?: boolean;
+}
+
+/**
+ * Does a ball centred `local` units from the paddle's centre slip through a hole? It needs some
+ * clearance either side; a hole that reaches the paddle's end is open on that side.
+ */
+export function throughHole(p: Paddle, local: number, r: number): boolean {
+  if (!p.holes) return false;
+  const clear = r * 0.5;
+  for (const hole of p.holes) {
+    const lo = hole.lo <= -p.h / 2 + 0.5 ? -Infinity : hole.lo + clear;
+    const hi = hole.hi >= p.h / 2 - 0.5 ? Infinity : hole.hi - clear;
+    if (local > lo && local < hi) return true;
+  }
+  return false;
 }
 
 export interface Field {
@@ -148,10 +173,12 @@ function hitPaddle(ball: Ball, p: Paddle, side: 0 | 1, px: number, py: number, o
   // Must have been in front of the face at the start of the step and past it at the end.
   if ((prevLead - face) * dir < 0 || (lead - face) * dir >= 0) return false;
 
+  if (p.gone) return false;
   const t = (prevLead - face) / (prevLead - lead);
   const yAt = py + (ball.y - py) * t;
   const reach = p.h / 2 + ball.r;
   if (Math.abs(yAt - p.y) > reach) return false;
+  if (throughHole(p, yAt - p.y, ball.r)) return false;
 
   const offset = Math.max(-1, Math.min(1, (yAt - p.y) / reach));
   const speed = Math.min(speedOf(ball) * PHYS.speedUp, PHYS.maxSpeed);

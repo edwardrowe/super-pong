@@ -40,8 +40,12 @@ export interface Game {
   /** A finger went down on one half of the screen, or a confirm key was pressed (side = -1). */
   onPress?(side: Side | -1): void;
   dispose?(): void;
-  /** Power-up kinds the Debug screen can set, if the game has any (max = most a player can hold). */
-  readonly powerUps?: { id: string; name: string; max: number }[];
+  /**
+   * Power-up kinds the Debug screen can set, if the game has any (max = most a player can hold;
+   * slot = it takes one of the player's `itemSlots`, which those kinds share).
+   */
+  readonly powerUps?: { id: string; name: string; max: number; slot?: boolean }[];
+  readonly itemSlots?: number;
   /** How many of a power-up a player has now. */
   powerUpCount?(side: Side, id: string): number;
   /** Debug: give or take power-ups so the player has exactly `count`. */

@@ -10,7 +10,7 @@ export const POWER = {
   /** Pickup radius (world units). */
   radius: 38,
   /** Paddle growth per pickup, and the most pickups that count. */
-  growBy: 18,
+  growBy: 36,
   maxGrows: 5,
 };
 
